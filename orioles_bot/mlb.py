@@ -21,6 +21,8 @@ HEADSHOT_URL_TEMPLATE = (
     "https://img.mlbstatic.com/mlb-photos/image/upload/"
     "w_180,q_auto:good/v1/people/{player_id}/headshot/67/current"
 )
+BASEBALL_SAVANT_SEARCH_URL = "https://baseballsavant.mlb.com/statcast_search"
+BASEBALL_SAVANT_PLAYER_URL = "https://baseballsavant.mlb.com/savant-player"
 
 
 class MlbApiError(RuntimeError):
@@ -42,6 +44,22 @@ def build_mlb_url(path: str, params: dict[str, Any] | None = None) -> str:
 
 def headshot_url(player_id: int | str) -> str:
     return HEADSHOT_URL_TEMPLATE.format(player_id=player_id)
+
+
+def savant_matchup_url(batter_id: int | str, pitcher_id: int | str) -> str:
+    params = urlencode(
+        {
+            "hfBatters": f"{batter_id}|",
+            "hfPitchers": f"{pitcher_id}|",
+            "player_type": "batter",
+            "type": "batter",
+        }
+    )
+    return f"{BASEBALL_SAVANT_SEARCH_URL}?{params}"
+
+
+def savant_player_url(player_id: int | str) -> str:
+    return f"{BASEBALL_SAVANT_PLAYER_URL}/{player_id}"
 
 
 class MlbClient:
@@ -118,8 +136,12 @@ def parse_game(raw_game: dict[str, Any], boxscore: dict[str, Any] | None = None)
     venue = raw_game.get("venue", {}).get("name") or "TBD"
 
     lineup = _extract_lineup(boxscore, side)
+    opponent_lineup = _extract_lineup(boxscore, other_side)
     pitcher = _extract_confirmed_pitcher(boxscore, side) or _extract_probable_pitcher(
         teams.get(side, {})
+    )
+    opponent_pitcher = _extract_confirmed_pitcher(boxscore, other_side) or _extract_probable_pitcher(
+        teams.get(other_side, {})
     )
     orioles_score = _safe_int(teams.get(side, {}).get("score"))
     opponent_score = _safe_int(teams.get(other_side, {}).get("score"))
@@ -144,7 +166,9 @@ def parse_game(raw_game: dict[str, Any], boxscore: dict[str, Any] | None = None)
         orioles_score=orioles_score,
         opponent_score=opponent_score,
         pitcher=pitcher,
+        opponent_pitcher=opponent_pitcher,
         lineup=lineup,
+        opponent_lineup=opponent_lineup,
     )
 
 

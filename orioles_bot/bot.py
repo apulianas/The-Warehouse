@@ -77,6 +77,8 @@ class OriolesBot(commands.Bot):
             return
 
         for game in games:
+            if not game.lineup or not game.opponent_lineup:
+                continue
             key = lineup_announcement_key(target_date, game)
             if key and self.announcement_state.unseen(key):
                 await channel.send(

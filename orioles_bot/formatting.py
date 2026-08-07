@@ -3,7 +3,8 @@ from __future__ import annotations
 from datetime import date
 from zoneinfo import ZoneInfo
 
-from .models import GameInfo, LineupPlayer, ORIOLES_TEAM_NAME, TransactionInfo
+from .mlb import savant_matchup_url, savant_player_url
+from .models import GameInfo, LineupPlayer, ORIOLES_TEAM_NAME, PitcherInfo, TransactionInfo
 
 
 def format_game_title(game: GameInfo) -> str:
@@ -31,15 +32,22 @@ def format_pitcher(game: GameInfo) -> str:
     return f"{game.pitcher.status}: {game.pitcher.name}"
 
 
-def format_lineup(players: tuple[LineupPlayer, ...]) -> str:
+def format_lineup(
+    players: tuple[LineupPlayer, ...], opposing_pitcher: PitcherInfo | None = None
+) -> str:
     if not players:
         return "Lineup has not been posted yet."
 
     lines = []
     for player in players:
+        link = (
+            savant_matchup_url(player.player_id, opposing_pitcher.player_id)
+            if opposing_pitcher and opposing_pitcher.player_id
+            else player.headshot_url
+        )
         lines.append(
             f"{player.batting_order}. {player.position} "
-            f"[{player.name}]({player.headshot_url})"
+            f"[{player.name}]({link})"
         )
     return "\n".join(lines)
 
@@ -50,8 +58,8 @@ def format_no_games(target_date: date) -> str:
 
 def format_transaction(transaction: TransactionInfo) -> str:
     player = transaction.player_name
-    if player and transaction.headshot_url:
-        player = f"[{player}]({transaction.headshot_url})"
+    if player and transaction.player_id is not None:
+        player = f"[{player}]({savant_player_url(transaction.player_id)})"
     elif not player:
         player = "Orioles"
     return f"**{transaction.type_description}** — {player}: {transaction.description}"
