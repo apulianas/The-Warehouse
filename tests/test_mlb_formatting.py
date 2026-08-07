@@ -9,6 +9,7 @@ from orioles_bot.mlb import (
     parse_game,
     parse_transaction,
     savant_matchup_url,
+    savant_player_url,
 )
 from orioles_bot.models import LineupPlayer
 
@@ -95,6 +96,12 @@ def test_savant_matchup_url_filters_batter_and_pitcher() -> None:
     )
 
 
+def test_savant_player_url_uses_player_id() -> None:
+    assert savant_player_url(12345) == (
+        "https://baseballsavant.mlb.com/savant-player/12345"
+    )
+
+
 def test_format_lineup_links_player_headshots() -> None:
     player = LineupPlayer(
         player_id=101,
@@ -125,7 +132,7 @@ def test_parse_and_format_transaction() -> None:
     assert transaction.transaction_id == "55"
     assert transaction.headshot_url == headshot_url(123)
     assert format_transaction(transaction).startswith(
-        "**Recalled** — [Example Player](https://img.mlbstatic.com/"
+        "**Recalled** — [Example Player](https://baseballsavant.mlb.com/savant-player/123)"
     )
 
 

@@ -9,6 +9,7 @@ A Dockerized Python 3.12 Discord bot that posts Baltimore Orioles lineups and ro
   - `/transactions [date]` — Orioles roster transactions for a date.
   - `/help` — command help.
 - Discord embeds with game status, venue, score when available, batting order, positions, pitcher, transaction details, and clickable Baseball Savant batter-versus-pitcher links.
+- Transaction player names link to their Baseball Savant player pages.
 - Opposing batting orders are included in the same embed as a clickable Discord spoiler.
 - Background polling for today's lineup and transaction updates.
 - Automatic lineup posts wait until both teams' batting orders are available.

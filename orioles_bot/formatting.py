@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date
 from zoneinfo import ZoneInfo
 
-from .mlb import savant_matchup_url
+from .mlb import savant_matchup_url, savant_player_url
 from .models import GameInfo, LineupPlayer, ORIOLES_TEAM_NAME, PitcherInfo, TransactionInfo
 
 
@@ -58,8 +58,8 @@ def format_no_games(target_date: date) -> str:
 
 def format_transaction(transaction: TransactionInfo) -> str:
     player = transaction.player_name
-    if player and transaction.headshot_url:
-        player = f"[{player}]({transaction.headshot_url})"
+    if player and transaction.player_id is not None:
+        player = f"[{player}]({savant_player_url(transaction.player_id)})"
     elif not player:
         player = "Orioles"
     return f"**{transaction.type_description}** — {player}: {transaction.description}"
