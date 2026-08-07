@@ -22,6 +22,7 @@ HEADSHOT_URL_TEMPLATE = (
     "w_180,q_auto:good/v1/people/{player_id}/headshot/67/current"
 )
 BASEBALL_SAVANT_SEARCH_URL = "https://baseballsavant.mlb.com/statcast_search"
+BASEBALL_SAVANT_PLAYER_URL = "https://baseballsavant.mlb.com/savant-player"
 
 
 class MlbApiError(RuntimeError):
@@ -55,6 +56,10 @@ def savant_matchup_url(batter_id: int | str, pitcher_id: int | str) -> str:
         }
     )
     return f"{BASEBALL_SAVANT_SEARCH_URL}?{params}"
+
+
+def savant_player_url(player_id: int | str) -> str:
+    return f"{BASEBALL_SAVANT_PLAYER_URL}/{player_id}"
 
 
 class MlbClient:
