@@ -234,8 +234,9 @@ def test_format_rate_drops_the_leading_zero() -> None:
     assert format_rate(None) == "—"
 
 
-def test_format_era_uses_two_decimals() -> None:
+def test_format_era_uses_two_decimals_and_keeps_the_leading_zero() -> None:
     assert format_era(2.1) == "2.10"
+    assert format_era(0.89) == "0.89"
     assert format_era(None) == "—"
 
 
@@ -285,7 +286,7 @@ def test_format_pitching_split_renders_the_record_and_rates() -> None:
     text = format_pitching_split(pitching)
 
     assert "2 G (2 GS), 12.1 IP" in text
-    assert "1-0, 2.19 ERA, .890 WHIP" in text
+    assert "1-0, 2.19 ERA, 0.89 WHIP" in text
     assert "15 K" in text
 
 
@@ -410,3 +411,25 @@ class _FakeClock:
 
     def __call__(self) -> float:
         return self._now
+
+
+def test_service_fetches_the_roster_once_for_concurrent_callers() -> None:
+    """Autocomplete keystrokes race, so a cold roster must be fetched once."""
+
+    class SlowClient(FakeClient):
+        async def fetch_roster(self) -> tuple[PlayerRef, ...]:
+            self.roster_calls += 1
+            await asyncio.sleep(0)
+            return (ADLEY, GUNNAR)
+
+    client = SlowClient()
+    service = PlayerStatsService()
+
+    async def scenario() -> None:
+        results = await asyncio.gather(
+            *(service.roster(client) for _ in range(5))
+        )
+        assert all(result == (ADLEY, GUNNAR) for result in results)
+        assert client.roster_calls == 1
+
+    asyncio.run(scenario())
