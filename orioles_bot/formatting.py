@@ -193,6 +193,7 @@ def format_rate(value: float | None) -> str:
 
 
 def format_era(value: float | None) -> str:
+    """ERA and WHIP keep their leading zero: 0.89, not .890."""
     if value is None:
         return NO_STAT
     return f"{value:.2f}"
@@ -244,7 +245,7 @@ def format_pitching_split(split: PitchingSplit) -> str:
     return (
         f"**Pitching** — {split.games} G ({split.games_started} GS), "
         f"{format_innings(split.innings_pitched)} IP\n"
-        f"{record}, {format_era(split.era)} ERA, {format_rate(split.whip)} WHIP\n"
+        f"{record}, {format_era(split.era)} ERA, {format_era(split.whip)} WHIP\n"
         f"{split.hits} H, {split.runs} R, {split.earned_runs} ER, "
         f"{split.home_runs} HR\n"
         f"{split.walks} BB, {split.strikeouts} K"
