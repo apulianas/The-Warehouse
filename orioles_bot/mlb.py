@@ -23,6 +23,7 @@ HEADSHOT_URL_TEMPLATE = (
 )
 BASEBALL_SAVANT_PLAYER_URL = "https://baseballsavant.mlb.com/savant-player"
 BASEBALL_SAVANT_PREVIEW_URL = "https://baseballsavant.mlb.com/preview"
+BASEBALL_SAVANT_PLAYER_MATCHUP_URL = "https://baseballsavant.mlb.com/player_matchup"
 TEAM_LOGO_URL_TEMPLATE = "https://midfield.mlbstatic.com/v1/team/{team_id}/spots/240"
 
 
@@ -72,6 +73,29 @@ def savant_player_url(player_id: int | str) -> str:
 def savant_preview_url(game_pk: int | str) -> str:
     """Statcast game preview: probables, lineups, and matchup splits."""
     return f"{BASEBALL_SAVANT_PREVIEW_URL}?{urlencode({'game_pk': str(game_pk)})}"
+
+
+def savant_team_matchup_url(
+    batting_team_id: int | str,
+    pitching_team_id: int | str,
+    pitcher_id: int | str,
+) -> str:
+    """Savant "Team Batters vs Individual Pitcher" page.
+
+    Unlike the Statcast search page, this one renders server side, so the
+    whole batting order's history against the opposing starter is visible
+    immediately. All four params are required; omitting a team renders an
+    empty form.
+    """
+    params = urlencode(
+        {
+            "type": "batter",
+            "teamPitching": str(pitching_team_id),
+            "teamBatting": str(batting_team_id),
+            "player_id": str(pitcher_id),
+        }
+    )
+    return f"{BASEBALL_SAVANT_PLAYER_MATCHUP_URL}?{params}"
 
 
 def team_logo_url(team_id: int | str) -> str:
@@ -179,6 +203,7 @@ def parse_game(raw_game: dict[str, Any], boxscore: dict[str, Any] | None = None)
         home_team_id=_safe_int(teams.get("home", {}).get("team", {}).get("id")),
         away_team=teams.get("away", {}).get("team", {}).get("name") or "Away",
         opponent=opponent.get("name") or "Opponent TBD",
+        opponent_team_id=_safe_int(opponent.get("id")),
         is_home=side == "home",
         orioles_score=orioles_score,
         opponent_score=opponent_score,
