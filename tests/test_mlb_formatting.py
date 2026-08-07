@@ -2,16 +2,20 @@ from __future__ import annotations
 
 from datetime import date
 
-from orioles_bot.formatting import format_lineup, format_no_transactions, format_transaction
+from orioles_bot.formatting import (
+    format_lineup,
+    format_no_transactions,
+    format_pitchers,
+    format_transaction,
+)
 from orioles_bot.mlb import (
     build_mlb_url,
     headshot_url,
     parse_game,
     parse_transaction,
-    savant_matchup_url,
     savant_player_url,
 )
-from orioles_bot.models import LineupPlayer
+from orioles_bot.models import GameInfo, LineupPlayer, PitcherInfo
 
 
 def test_build_mlb_url_sorts_and_encodes_query_params() -> None:
@@ -89,14 +93,6 @@ def test_parse_game_extracts_orioles_lineup_from_live_feed() -> None:
     assert game.opponent_pitcher.name == "Opponent Starter"
 
 
-def test_savant_matchup_url_filters_batter_and_pitcher() -> None:
-    assert savant_matchup_url(101, 201) == (
-        "https://baseballsavant.mlb.com/statcast_search?"
-        "all=true&batters_lookup%5B%5D=101&pitchers_lookup%5B%5D=201&hfGT=R%7C&"
-        "type=details"
-    )
-
-
 def test_savant_player_url_uses_player_id() -> None:
     assert savant_player_url(12345) == (
         "https://baseballsavant.mlb.com/savant-player/12345"
@@ -138,3 +134,45 @@ def test_parse_and_format_transaction() -> None:
 
 def test_no_transactions_message_mentions_date() -> None:
     assert "August" in format_no_transactions(date(2026, 8, 6))
+
+
+def test_format_pitchers_renders_both_starters() -> None:
+    game = _game_with_pitchers(
+        PitcherInfo(201, "Orioles Starter", status="Starting pitcher"),
+        PitcherInfo(401, "Opponent Starter", status="Probable pitcher"),
+    )
+
+    assert format_pitchers(game) == (
+        f"Baltimore Orioles starter: [Orioles Starter]({savant_player_url(201)})"
+        " (Starting pitcher)\n"
+        f"New York Yankees starter: [Opponent Starter]({savant_player_url(401)})"
+        " (Probable pitcher)"
+    )
+
+
+def test_format_pitchers_handles_unannounced_opponent() -> None:
+    game = _game_with_pitchers(PitcherInfo(201, "Orioles Starter"), None)
+
+    assert format_pitchers(game).endswith("New York Yankees starter: not announced")
+
+
+def _game_with_pitchers(
+    pitcher: PitcherInfo | None, opponent_pitcher: PitcherInfo | None
+) -> GameInfo:
+    return GameInfo(
+        game_pk=1,
+        game_date=None,
+        status="Pre-Game",
+        venue="Oriole Park at Camden Yards",
+        home_team="Baltimore Orioles",
+        home_team_id=110,
+        away_team="New York Yankees",
+        opponent="New York Yankees",
+        is_home=True,
+        orioles_score=None,
+        opponent_score=None,
+        pitcher=pitcher,
+        opponent_pitcher=opponent_pitcher,
+        lineup=(),
+        opponent_lineup=(),
+    )
