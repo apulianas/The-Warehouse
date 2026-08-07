@@ -224,9 +224,12 @@ def player_stats_embeds(
         )
         for game in page:
             location = "vs" if game.is_home else "at"
-            result = f" — {game.result}" if game.result else ""
+            result = f"Team {game.result}" if game.result else "Team result unknown"
             embed.add_field(
-                name=f"**{game.game_date:%b %-d} {location} {game.opponent}{result}**",
+                name=(
+                    f"**{game.game_date:%b %-d} {location} {game.opponent} — "
+                    f"{result}, Pitcher {game.decision}**"
+                ),
                 value=_limit_field(format_pitching_game(game)),
                 inline=False,
             )

@@ -251,6 +251,7 @@ def test_parse_pitching_game_logs_reads_team_result_and_game_line() -> None:
                                 "earnedRuns": 1,
                                 "baseOnBalls": 2,
                                 "strikeOuts": 8,
+                                "wins": 1,
                             },
                         }
                     ],
@@ -263,6 +264,7 @@ def test_parse_pitching_game_logs_reads_team_result_and_game_line() -> None:
     assert games[0].opponent == "New York Yankees"
     assert games[0].is_home is True
     assert games[0].result == "W"
+    assert games[0].decision == "Win"
     assert games[0].stat.innings_pitched == pytest.approx(6.2)
     assert games[0].stat.strikeouts == 8
 

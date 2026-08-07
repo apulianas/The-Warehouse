@@ -134,6 +134,7 @@ class PitchingGame:
     is_home: bool
     result: str | None
     stat: PitchingSplit
+    decision: str = "No decision"
 
 
 @dataclass(frozen=True)
