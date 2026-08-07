@@ -268,12 +268,9 @@ def format_pitching_split(split: PitchingSplit) -> str:
 
 
 def format_pitching_game(game: PitchingGame) -> str:
-    location = "vs" if game.is_home else "at"
-    result = f"{game.result}, " if game.result else ""
     stat = game.stat
     return (
-        f"{game.game_date:%b %-d} {location} {game.opponent} — "
-        f"{result}{format_innings(stat.innings_pitched)} IP, "
+        f"{format_innings(stat.innings_pitched)} IP, "
         f"{stat.hits} H, {stat.runs} R, {stat.earned_runs} ER, "
         f"{stat.walks} BB, {stat.strikeouts} K"
     )

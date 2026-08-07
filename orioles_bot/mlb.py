@@ -964,6 +964,11 @@ def parse_pitching_game_logs(data: dict[str, Any]) -> tuple[PitchingGame, ...]:
             result: str | None = None
             if isinstance(split.get("isWin"), bool):
                 result = "W" if split["isWin"] else "L"
+            decision = "No decision"
+            if _stat_int(stat, "wins"):
+                decision = "Win"
+            elif _stat_int(stat, "losses"):
+                decision = "Loss"
             games.append(
                 PitchingGame(
                     game_date=game_date,
@@ -971,6 +976,7 @@ def parse_pitching_game_logs(data: dict[str, Any]) -> tuple[PitchingGame, ...]:
                     is_home=bool(split.get("isHome")),
                     result=result,
                     stat=parse_pitching_split(stat),
+                    decision=decision,
                 )
             )
     return tuple(games)
