@@ -12,15 +12,34 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from .config import BotConfig, load_config, webhook_id
-from .dates import parse_user_date, today_in_zone
-from .embeds import error_embed, help_embed, lineup_embeds, transaction_embeds
+from .dates import (
+    MAX_STATS_WINDOW_DAYS,
+    MIN_STATS_WINDOW_DAYS,
+    parse_user_date,
+    stats_window,
+    today_in_zone,
+)
+from .embeds import (
+    error_embed,
+    help_embed,
+    lineup_embeds,
+    player_stats_embed,
+    transaction_embeds,
+)
+from .formatting import format_player_not_found
 from .matchups import MatchupService
 from .mlb import MlbApiError, MlbClient
 from .models import GameInfo, TransactionInfo
+from .player_stats import PlayerStatsService
 from .state import AnnouncementState, channel_key
 
 
 LOGGER = logging.getLogger(__name__)
+
+DEFAULT_STATS_DAYS = 7
+StatsDays = app_commands.Range[
+    int, MIN_STATS_WINDOW_DAYS, MAX_STATS_WINDOW_DAYS
+]
 
 
 def webhook_label(url: str) -> str:
@@ -42,6 +61,7 @@ class OriolesBot(commands.Bot):
         self.session: aiohttp.ClientSession | None = None
         self.mlb: MlbClient | None = None
         self.matchups = MatchupService(config.matchup_min_pa)
+        self.player_stats = PlayerStatsService()
         self.announcement_state = AnnouncementState(config.state_file)
 
     async def setup_hook(self) -> None:
@@ -54,6 +74,7 @@ class OriolesBot(commands.Bot):
             )
         self.tree.add_command(_lineup_command(self))
         self.tree.add_command(_transactions_command(self))
+        self.tree.add_command(_player_stats_command(self))
         self.tree.add_command(_help_command())
         await self.tree.sync()
         if self.config.has_announcement_targets:
@@ -220,6 +241,66 @@ def _transactions_command(bot: OriolesBot) -> app_commands.Command[Any, ..., Non
         await interaction.followup.send(embeds=transaction_embeds(items, target_date))
 
     return transactions
+
+
+def _player_stats_command(bot: OriolesBot) -> app_commands.Command[Any, ..., None]:
+    @app_commands.command(
+        name="playerstats", description="Show a player's stats over the last N days."
+    )
+    @app_commands.describe(
+        player="Player name — pick from the Orioles roster or type any full name",
+        days=(
+            f"Window length in days ({MIN_STATS_WINDOW_DAYS}-"
+            f"{MAX_STATS_WINDOW_DAYS}, default {DEFAULT_STATS_DAYS})"
+        ),
+    )
+    async def playerstats(
+        interaction: discord.Interaction,
+        player: str,
+        days: StatsDays = DEFAULT_STATS_DAYS,
+    ) -> None:
+        try:
+            window = stats_window(days, bot.config.time_zone)
+        except ValueError as exc:
+            await interaction.response.send_message(str(exc), ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        client = _require_mlb(bot)
+        try:
+            resolved = await bot.player_stats.resolve(client, player)
+            if resolved is None:
+                await interaction.followup.send(
+                    format_player_not_found(player), ephemeral=True
+                )
+                return
+            hitting, pitching = await bot.player_stats.stats(
+                client, resolved.player_id, window
+            )
+        except MlbApiError as exc:
+            await interaction.followup.send(embed=error_embed(str(exc)), ephemeral=True)
+            return
+
+        await interaction.followup.send(
+            embed=player_stats_embed(resolved, window, hitting, pitching)
+        )
+
+    @playerstats.autocomplete("player")
+    async def playerstats_autocomplete(
+        interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        if bot.mlb is None:
+            return []
+        suggestions = await bot.player_stats.autocomplete(bot.mlb, current)
+        return [
+            app_commands.Choice(
+                name=f"{item.name} ({item.position})" if item.position else item.name,
+                value=str(item.player_id),
+            )
+            for item in suggestions
+        ]
+
+    return playerstats
 
 
 def _help_command() -> app_commands.Command[Any, ..., None]:

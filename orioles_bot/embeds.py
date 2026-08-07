@@ -11,22 +11,32 @@ from .formatting import (
     format_game_title,
     format_lineup,
     format_lineup_heading,
+    format_hitting_split,
     format_no_games,
+    format_no_player_stats,
     format_no_transactions,
     format_pitchers,
+    format_pitching_split,
+    format_player_heading,
+    format_stats_window,
     format_transaction,
 )
 from .mlb import (
     HEADSHOT_FEATURE_WIDTH,
     headshot_url,
+    savant_player_url,
     savant_preview_url,
     team_logo_url,
 )
 from .models import (
     GameInfo,
+    HittingSplit,
     MatchupAnnotation,
     ORIOLES_TEAM_ID,
     ORIOLES_TEAM_NAME,
+    PitchingSplit,
+    PlayerRef,
+    StatsWindow,
     TransactionInfo,
 )
 
@@ -147,6 +157,37 @@ def _set_transaction_art(
         embed.set_thumbnail(url=first_headshot)
 
 
+def player_stats_embed(
+    player: PlayerRef,
+    window: StatsWindow,
+    hitting: HittingSplit | None,
+    pitching: PitchingSplit | None,
+) -> discord.Embed:
+    sections = [format_player_heading(player), format_stats_window(window)]
+    body = [
+        section
+        for section in (
+            format_hitting_split(hitting) if hitting else None,
+            format_pitching_split(pitching) if pitching else None,
+        )
+        if section
+    ]
+    if body:
+        sections.extend(body)
+    else:
+        sections = [format_no_player_stats(player, window)]
+
+    embed = discord.Embed(
+        title=player.name,
+        url=savant_player_url(player.player_id),
+        description=_limit_description("\n\n".join(sections)),
+        color=ORIOLES_ORANGE,
+    )
+    embed.set_thumbnail(url=headshot_url(player.player_id))
+    embed.set_footer(text="Data: public MLB Stats API")
+    return embed
+
+
 def help_embed() -> discord.Embed:
     embed = discord.Embed(
         title="Orioles bot help",
@@ -164,6 +205,15 @@ def help_embed() -> discord.Embed:
     embed.add_field(
         name="/transactions [date]",
         value="Show Orioles roster transactions for the date. Date accepts YYYY-MM-DD or today.",
+        inline=False,
+    )
+    embed.add_field(
+        name="/playerstats <player> [days]",
+        value=(
+            "Show a player's hitting and pitching totals over the last N days "
+            "(default 7, max 162). Start typing a name to pick from the Orioles "
+            "roster, or type any big leaguer's full name."
+        ),
         inline=False,
     )
     embed.add_field(

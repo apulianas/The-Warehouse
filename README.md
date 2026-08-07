@@ -1,12 +1,13 @@
 # Orioles Discord Bot
 
-A Dockerized Python 3.12 Discord bot that posts Baltimore Orioles lineups and roster transactions from the public MLB Stats API.
+A Dockerized Python 3.12 Discord bot that posts Baltimore Orioles lineups, roster transactions, and player stats from the public MLB Stats API.
 
 ## Features
 
 - Slash commands:
   - `/lineup [date]` — scheduled Orioles games, probable/starting pitcher, and batting order when MLB has posted it.
   - `/transactions [date]` — Orioles roster transactions for a date.
+  - `/playerstats <player> [days]` — a player's hitting and pitching totals over the last N days.
   - `/help` — command help.
 - Discord embeds with game status, venue, score when available, both batting orders, positions, both starting pitchers, transaction details, and hot/cold matchup emojis with the underlying wOBA and plate appearances when enough history exists.
 - Every player name — batters, both starters, and everyone named in a transaction — links to their Baseball Savant player page. Multi-player trades link all sides, not just the headliner, and post as a single entry instead of once per player.
@@ -15,6 +16,11 @@ A Dockerized Python 3.12 Discord bot that posts Baltimore Orioles lineups and ro
 - Batter-versus-pitcher summaries are fetched from Baseball Savant and rendered inline, so the hot/cold read is visible without leaving Discord.
 - Both batting orders render as single 1-9 lists in one embed.
 - The embed thumbnail shows the home team's logo for the ballpark hosting the game.
+- `/playerstats` resolves a name through an autocomplete dropdown of the active Orioles
+  roster, and falls back to a league-wide search so any big leaguer can be looked up by
+  full name. The window defaults to the last 7 days and accepts 1 through 162.
+- Rolling stats and the roster are cached in memory, so repeated lookups in a busy
+  channel do not re-query the API.
 - Background polling for today's lineup and transaction updates.
 - Automatic lineup posts wait until both teams' batting orders are available.
 - Duplicate announcement prevention across restarts using `/data/state.json`.
