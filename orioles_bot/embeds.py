@@ -15,7 +15,7 @@ from .formatting import (
     format_pitchers,
     format_transaction,
 )
-from .mlb import team_logo_url
+from .mlb import savant_preview_url, team_logo_url
 from .models import GameInfo, MatchupAnnotation, ORIOLES_TEAM_NAME, TransactionInfo
 
 
@@ -50,15 +50,19 @@ def lineup_embeds(
         opponent_lineup = format_lineup(
             game.opponent_lineup, game.pitcher, matchup_annotations
         )
-        description = (
+        preview_link = f"[Statcast game preview]({savant_preview_url(game.game_pk)})"
+        body = (
             f"{header}\n\n"
             f"**{ORIOLES_TEAM_NAME} batting order**\n{orioles_lineup}\n\n"
             f"**{game.opponent} batting order**\n{opponent_lineup}"
         )
+        suffix = f"\n\n{preview_link}"
+        description = f"{_limit_description(body, 4096 - len(suffix))}{suffix}"
 
         embed = discord.Embed(
             title=format_game_title(game),
-            description=_limit_description(description),
+            url=savant_preview_url(game.game_pk),
+            description=description,
             color=ORIOLES_ORANGE,
         )
         if game.home_team_id is not None:

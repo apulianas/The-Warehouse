@@ -22,6 +22,7 @@ HEADSHOT_URL_TEMPLATE = (
     "w_180,q_auto:good/v1/people/{player_id}/headshot/67/current"
 )
 BASEBALL_SAVANT_PLAYER_URL = "https://baseballsavant.mlb.com/savant-player"
+BASEBALL_SAVANT_PREVIEW_URL = "https://baseballsavant.mlb.com/preview"
 TEAM_LOGO_URL_TEMPLATE = "https://midfield.mlbstatic.com/v1/team/{team_id}/spots/240"
 
 
@@ -66,6 +67,11 @@ def savant_matchup_params(batter_id: int | str, pitcher_id: int | str) -> str:
 
 def savant_player_url(player_id: int | str) -> str:
     return f"{BASEBALL_SAVANT_PLAYER_URL}/{player_id}"
+
+
+def savant_preview_url(game_pk: int | str) -> str:
+    """Statcast game preview: probables, lineups, and matchup splits."""
+    return f"{BASEBALL_SAVANT_PREVIEW_URL}?{urlencode({'game_pk': str(game_pk)})}"
 
 
 def team_logo_url(team_id: int | str) -> str:
