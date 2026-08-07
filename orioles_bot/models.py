@@ -26,6 +26,14 @@ class PitcherInfo:
 
 
 @dataclass(frozen=True)
+class MatchupAnnotation:
+    emoji: str
+    metric_name: str
+    metric_value: float
+    plate_appearances: int
+
+
+@dataclass(frozen=True)
 class GameInfo:
     game_pk: int
     game_date: datetime | None
