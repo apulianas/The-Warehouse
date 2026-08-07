@@ -11,8 +11,8 @@ LOGGER = logging.getLogger(__name__)
 CHANNEL_KEY_SEPARATOR = "@"
 
 
-def channel_key(key: str, channel_id: int) -> str:
-    return f"{key}{CHANNEL_KEY_SEPARATOR}{channel_id}"
+def channel_key(key: str, target: int | str) -> str:
+    return f"{key}{CHANNEL_KEY_SEPARATOR}{target}"
 
 
 class AnnouncementState:
