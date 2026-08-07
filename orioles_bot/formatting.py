@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from datetime import date
 from zoneinfo import ZoneInfo
 
-from .mlb import savant_matchup_url, savant_player_url
+from .mlb import savant_player_url
 from .models import (
     GameInfo,
     LineupPlayer,
@@ -33,14 +33,25 @@ def format_game_time(game: GameInfo, time_zone: ZoneInfo) -> str:
 
 
 def format_pitcher(game: GameInfo) -> str:
-    if game.pitcher is None:
-        return "Pitcher not announced."
-    if game.pitcher.player_id is not None:
-        return (
-            f"{game.pitcher.status}: "
-            f"[{game.pitcher.name}]({savant_player_url(game.pitcher.player_id)})"
-        )
-    return f"{game.pitcher.status}: {game.pitcher.name}"
+    return _format_pitcher_line(ORIOLES_TEAM_NAME, game.pitcher)
+
+
+def format_opponent_pitcher(game: GameInfo) -> str:
+    return _format_pitcher_line(game.opponent, game.opponent_pitcher)
+
+
+def format_pitchers(game: GameInfo) -> str:
+    return f"{format_pitcher(game)}\n{format_opponent_pitcher(game)}"
+
+
+def _format_pitcher_line(team: str, pitcher: PitcherInfo | None) -> str:
+    if pitcher is None:
+        return f"{team} starter: not announced"
+    if pitcher.player_id is not None:
+        name = f"[{pitcher.name}]({savant_player_url(pitcher.player_id)})"
+    else:
+        name = pitcher.name
+    return f"{team} starter: {name} ({pitcher.status})"
 
 
 def format_lineup(
@@ -53,17 +64,12 @@ def format_lineup(
 
     lines = []
     for player in players:
-        link = (
-            savant_matchup_url(player.player_id, opposing_pitcher.player_id)
-            if opposing_pitcher and opposing_pitcher.player_id
-            else savant_player_url(player.player_id)
-        )
         annotation = _matchup_annotation(player, opposing_pitcher, matchup_annotations)
         name = f"{player.name} {annotation.emoji}" if annotation else player.name
         metric = f" ({_format_matchup_metric(annotation)})" if annotation else ""
         lines.append(
             f"{player.batting_order}. {player.position} "
-            f"[{name}]({link}){metric}"
+            f"[{name}]({savant_player_url(player.player_id)}){metric}"
         )
     return "\n".join(lines)
 

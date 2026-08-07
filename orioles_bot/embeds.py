@@ -12,7 +12,7 @@ from .formatting import (
     format_lineup,
     format_no_games,
     format_no_transactions,
-    format_pitcher,
+    format_pitchers,
     format_transaction,
 )
 from .mlb import team_logo_url
@@ -42,7 +42,7 @@ def lineup_embeds(
         header = (
             f"{format_game_time(game, time_zone)} • {game.venue}\n"
             f"Status: {game.status}\n"
-            f"{format_pitcher(game)}"
+            f"{format_pitchers(game)}"
         )
         orioles_lineup = format_lineup(
             game.lineup, game.opponent_pitcher, matchup_annotations

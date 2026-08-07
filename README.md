@@ -8,8 +8,8 @@ A Dockerized Python 3.12 Discord bot that posts Baltimore Orioles lineups and ro
   - `/lineup [date]` — scheduled Orioles games, probable/starting pitcher, and batting order when MLB has posted it.
   - `/transactions [date]` — Orioles roster transactions for a date.
   - `/help` — command help.
-- Discord embeds with game status, venue, score when available, batting order, positions, pitcher, transaction details, clickable Baseball Savant batter-versus-pitcher links, and hot/cold matchup emojis when enough history exists.
-- Pitcher and transaction player names link to their Baseball Savant player pages.
+- Discord embeds with game status, venue, score when available, both batting orders, positions, both starting pitchers, transaction details, and hot/cold matchup emojis with the underlying wOBA and plate appearances when enough history exists.
+- Every player name — batters, both starters, and transaction players — links to their Baseball Savant player page. Batter-versus-pitcher history is fetched from Baseball Savant and rendered inline rather than linked, because the Statcast search page cannot be deep-linked with a pre-filled matchup filter.
 - Both batting orders render as single 1-9 lists in one embed.
 - The embed thumbnail shows the home team's logo for the ballpark hosting the game.
 - Background polling for today's lineup and transaction updates.
@@ -67,7 +67,8 @@ Representative `/lineup` embed:
 Baltimore Orioles at New York Yankees
 Thu, Aug 6 at 7:05 PM EDT • Yankee Stadium
 Status: Pre-Game
-Probable pitcher: Zach Eflin
+Baltimore Orioles starter: Zach Eflin (Probable pitcher)
+New York Yankees starter: Max Fried (Probable pitcher)
 
 Baltimore Orioles batting order
 1. SS Gunnar Henderson 🔥 (.450 wOBA, 8 PA)
@@ -81,7 +82,7 @@ New York Yankees batting order
 ...
 ```
 
-Both lineups appear in the same embed, and the thumbnail shows the home team's logo.
+Both lineups appear in the same embed, every name links to Baseball Savant, and the thumbnail shows the home team's logo.
 
 If MLB has not posted a lineup yet:
 
