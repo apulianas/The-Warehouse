@@ -7,10 +7,14 @@ from zoneinfo import ZoneInfo
 from .mlb import savant_player_url, savant_team_matchup_url
 from .models import (
     GameInfo,
+    HittingSplit,
     LineupPlayer,
     MatchupAnnotation,
     ORIOLES_TEAM_NAME,
     PitcherInfo,
+    PitchingSplit,
+    PlayerRef,
+    StatsWindow,
     TransactionInfo,
     TransactionPlayer,
 )
@@ -171,3 +175,88 @@ def _linkify_players(
 
 def format_no_transactions(target_date: date) -> str:
     return f"No Orioles roster transactions found for {target_date:%A, %B %-d, %Y}."
+
+
+NO_STAT = "—"
+
+
+def format_rate(value: float | None) -> str:
+    """A batting rate in baseball's leading-dot style: .284, not 0.284."""
+    if value is None:
+        return NO_STAT
+    text = f"{value:.3f}"
+    if text.startswith("0."):
+        return text[1:]
+    if text.startswith("-0."):
+        return f"-{text[2:]}"
+    return text
+
+
+def format_era(value: float | None) -> str:
+    if value is None:
+        return NO_STAT
+    return f"{value:.2f}"
+
+
+def format_innings(value: float | None) -> str:
+    """Innings in baseball's thirds notation, where .1 and .2 mean one and two outs."""
+    if value is None:
+        return NO_STAT
+    whole = int(value)
+    outs = int(round((abs(value) - abs(whole)) * 10))
+    if outs not in {0, 1, 2}:
+        return f"{value:.1f}"
+    return f"{whole}.{outs}"
+
+
+def format_stats_window(window: StatsWindow) -> str:
+    day_label = "day" if window.days == 1 else "days"
+    return (
+        f"Last {window.days} {day_label} "
+        f"({window.start:%b %-d} – {window.end:%b %-d, %Y})"
+    )
+
+
+def format_player_heading(player: PlayerRef) -> str:
+    name = f"[{player.name}]({savant_player_url(player.player_id)})"
+    return f"{name} ({player.position})" if player.position else name
+
+
+def format_hitting_split(split: HittingSplit) -> str:
+    slash = (
+        f"{format_rate(split.average)}/"
+        f"{format_rate(split.on_base_percentage)}/"
+        f"{format_rate(split.slugging_percentage)}"
+    )
+    return (
+        f"**Hitting** — {split.games} G, {split.plate_appearances} PA\n"
+        f"{slash} (OPS {format_rate(split.ops)})\n"
+        f"{split.hits} H, {split.doubles} 2B, {split.triples} 3B, "
+        f"{split.home_runs} HR, {split.rbi} RBI, {split.runs} R\n"
+        f"{split.walks} BB, {split.strikeouts} K, {split.stolen_bases} SB"
+    )
+
+
+def format_pitching_split(split: PitchingSplit) -> str:
+    record = f"{split.wins}-{split.losses}"
+    if split.saves:
+        record = f"{record}, {split.saves} SV"
+    return (
+        f"**Pitching** — {split.games} G ({split.games_started} GS), "
+        f"{format_innings(split.innings_pitched)} IP\n"
+        f"{record}, {format_era(split.era)} ERA, {format_rate(split.whip)} WHIP\n"
+        f"{split.hits} H, {split.runs} R, {split.earned_runs} ER, "
+        f"{split.home_runs} HR\n"
+        f"{split.walks} BB, {split.strikeouts} K"
+    )
+
+
+def format_no_player_stats(player: PlayerRef, window: StatsWindow) -> str:
+    return (
+        f"{format_player_heading(player)} has no recorded games in the "
+        f"last {window.days} days."
+    )
+
+
+def format_player_not_found(query: str) -> str:
+    return f"No player found for “{query.strip()}”. Try a full name, like Adley Rutschman."
