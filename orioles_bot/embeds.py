@@ -11,27 +11,48 @@ from .formatting import (
     format_game_title,
     format_lineup,
     format_lineup_heading,
+    format_hitting_split,
     format_no_games,
+    format_no_player_stats,
+    format_no_scheduled_games,
+    format_no_standings,
     format_no_transactions,
+    format_orioles_standing,
     format_pitchers,
+    format_pitching_split,
+    format_player_heading,
+    format_schedule_day,
+    format_schedule_entry,
+    format_schedule_window,
+    format_standings,
+    format_stats_window,
     format_transaction,
 )
 from .mlb import (
     HEADSHOT_FEATURE_WIDTH,
     headshot_url,
+    savant_player_url,
     savant_preview_url,
     team_logo_url,
 )
 from .models import (
+    DivisionStandings,
     GameInfo,
+    HittingSplit,
     MatchupAnnotation,
+    NextGame,
     ORIOLES_TEAM_ID,
     ORIOLES_TEAM_NAME,
+    PitchingSplit,
+    PlayerRef,
+    ScheduleWindow,
+    StatsWindow,
     TransactionInfo,
 )
 
 
 ORIOLES_ORANGE = discord.Color.from_rgb(223, 70, 1)
+MAX_EMBED_FIELDS = 25
 
 
 def lineup_embeds(
@@ -147,6 +168,103 @@ def _set_transaction_art(
         embed.set_thumbnail(url=first_headshot)
 
 
+def player_stats_embed(
+    player: PlayerRef,
+    window: StatsWindow,
+    hitting: HittingSplit | None,
+    pitching: PitchingSplit | None,
+) -> discord.Embed:
+    sections = [format_player_heading(player), format_stats_window(window)]
+    body = [
+        section
+        for section in (
+            format_hitting_split(hitting) if hitting else None,
+            format_pitching_split(pitching) if pitching else None,
+        )
+        if section
+    ]
+    if body:
+        sections.extend(body)
+    else:
+        sections = [format_no_player_stats(player, window)]
+
+    embed = discord.Embed(
+        title=player.name,
+        url=savant_player_url(player.player_id),
+        description=_limit_description("\n\n".join(sections)),
+        color=ORIOLES_ORANGE,
+    )
+    embed.set_thumbnail(url=headshot_url(player.player_id))
+    embed.set_footer(text="Data: public MLB Stats API")
+    return embed
+
+
+def standings_embed(
+    standings: DivisionStandings | None,
+    next_games: Mapping[int, NextGame] | None = None,
+    time_zone: ZoneInfo | None = None,
+) -> discord.Embed:
+    if standings is None:
+        return discord.Embed(
+            title="AL East standings",
+            description=format_no_standings(),
+            color=ORIOLES_ORANGE,
+        )
+
+    title = f"{standings.division_name} standings"
+    if standings.season:
+        title = f"{title} — {standings.season}"
+
+    embed = discord.Embed(
+        title=title,
+        description=_limit_description(
+            format_standings(standings, next_games, time_zone)
+        ),
+        color=ORIOLES_ORANGE,
+    )
+    embed.set_thumbnail(url=team_logo_url(ORIOLES_TEAM_ID))
+    summary = format_orioles_standing(standings)
+    embed.set_footer(
+        text=f"{summary} • Data: public MLB Stats API"
+        if summary
+        else "Data: public MLB Stats API"
+    )
+    return embed
+
+
+def schedule_embeds(
+    games: Sequence[GameInfo], window: ScheduleWindow, time_zone: ZoneInfo
+) -> list[discord.Embed]:
+    if not games:
+        return [
+            discord.Embed(
+                title="Orioles schedule",
+                description=format_no_scheduled_games(window),
+                color=ORIOLES_ORANGE,
+            )
+        ]
+
+    embed = discord.Embed(
+        title="Orioles schedule",
+        description=format_schedule_window(window),
+        color=ORIOLES_ORANGE,
+    )
+    for game in games[:MAX_EMBED_FIELDS]:
+        embed.add_field(
+            name=format_schedule_day(game, time_zone),
+            value=_limit_field(format_schedule_entry(game, time_zone)),
+            inline=False,
+        )
+    embed.set_thumbnail(url=team_logo_url(ORIOLES_TEAM_ID))
+    if len(games) > MAX_EMBED_FIELDS:
+        embed.set_footer(
+            text=f"Showing {MAX_EMBED_FIELDS} of {len(games)} games."
+        )
+    else:
+        embed.set_footer(text="Data: public MLB Stats API")
+    return [embed]
+
+
 def help_embed() -> discord.Embed:
     embed = discord.Embed(
         title="Orioles bot help",
@@ -164,6 +282,31 @@ def help_embed() -> discord.Embed:
     embed.add_field(
         name="/transactions [date]",
         value="Show Orioles roster transactions for the date. Date accepts YYYY-MM-DD or today.",
+        inline=False,
+    )
+    embed.add_field(
+        name="/playerstats <player> [days]",
+        value=(
+            "Show a player's hitting and pitching totals over the last N days "
+            "(default 7, max 162). Start typing a name to pick from the Orioles "
+            "roster, or type any big leaguer's full name."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="/standings",
+        value=(
+            "Show the AL East standings with each team's record, games back, "
+            "streak, and next opponent."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="/schedule [days]",
+        value=(
+            "Show upcoming Orioles games over the next N days (default 7, max 30) "
+            "with opponent, start time, and probable starters."
+        ),
         inline=False,
     )
     embed.add_field(
