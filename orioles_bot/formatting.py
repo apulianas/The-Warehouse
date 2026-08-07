@@ -14,6 +14,7 @@ from .models import (
     NextGame,
     ORIOLES_TEAM_NAME,
     PitcherInfo,
+    PitchingGame,
     PitchingSplit,
     PlayerRef,
     ScheduleWindow,
@@ -263,6 +264,18 @@ def format_pitching_split(split: PitchingSplit) -> str:
         f"{split.hits} H, {split.runs} R, {split.earned_runs} ER, "
         f"{split.home_runs} HR\n"
         f"{split.walks} BB, {split.strikeouts} K"
+    )
+
+
+def format_pitching_game(game: PitchingGame) -> str:
+    location = "vs" if game.is_home else "at"
+    result = f"{game.result}, " if game.result else ""
+    stat = game.stat
+    return (
+        f"{game.game_date:%b %-d} {location} {game.opponent} — "
+        f"{result}{format_innings(stat.innings_pitched)} IP, "
+        f"{stat.hits} H, {stat.runs} R, {stat.earned_runs} ER, "
+        f"{stat.walks} BB, {stat.strikeouts} K"
     )
 
 

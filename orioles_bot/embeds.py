@@ -22,6 +22,7 @@ from .formatting import (
     format_orioles_wild_card,
     format_pitchers,
     format_pitching_split,
+    format_pitching_game,
     format_player_heading,
     format_schedule_day,
     format_schedule_entry,
@@ -47,6 +48,7 @@ from .models import (
     ORIOLES_TEAM_ID,
     ORIOLES_TEAM_NAME,
     PitchingSplit,
+    PitchingGame,
     PlayerRef,
     ScheduleWindow,
     StatsWindow,
@@ -178,6 +180,16 @@ def player_stats_embed(
     hitting: HittingSplit | None,
     pitching: PitchingSplit | None,
 ) -> discord.Embed:
+    return player_stats_embeds(player, window, hitting, pitching, ())[0]
+
+
+def player_stats_embeds(
+    player: PlayerRef,
+    window: StatsWindow,
+    hitting: HittingSplit | None,
+    pitching: PitchingSplit | None,
+    pitching_games: Sequence[PitchingGame],
+) -> list[discord.Embed]:
     sections = [format_player_heading(player), format_stats_window(window)]
     body = [
         section
@@ -192,15 +204,38 @@ def player_stats_embed(
     else:
         sections = [format_no_player_stats(player, window)]
 
-    embed = discord.Embed(
+    summary = discord.Embed(
         title=player.name,
         url=savant_player_url(player.player_id),
         description=_limit_description("\n\n".join(sections)),
         color=ORIOLES_ORANGE,
     )
-    embed.set_thumbnail(url=headshot_url(player.player_id))
-    embed.set_footer(text="Data: public MLB Stats API")
-    return embed
+    summary.set_thumbnail(url=headshot_url(player.player_id))
+    summary.set_footer(text="Data: public MLB Stats API")
+    if not pitching_games:
+        return [summary]
+
+    embeds = [summary]
+    for offset in range(0, len(pitching_games), MAX_EMBED_FIELDS):
+        page = pitching_games[offset : offset + MAX_EMBED_FIELDS]
+        embed = discord.Embed(
+            title=f"{player.name} — pitching game log",
+            color=ORIOLES_ORANGE,
+        )
+        for game in page:
+            embed.add_field(
+                name=f"{game.game_date:%b %-d} vs {game.opponent}"
+                if game.is_home
+                else f"{game.game_date:%b %-d} at {game.opponent}",
+                value=_limit_field(format_pitching_game(game)),
+                inline=False,
+            )
+        end = offset + len(page)
+        embed.set_footer(
+            text=f"Games {offset + 1}–{end} of {len(pitching_games)} • Data: public MLB Stats API"
+        )
+        embeds.append(embed)
+    return embeds
 
 
 def standings_embed(

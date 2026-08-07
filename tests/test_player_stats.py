@@ -13,6 +13,7 @@ from orioles_bot.formatting import (
     format_hitting_split,
     format_innings,
     format_pitching_split,
+    format_pitching_game,
     format_player_heading,
     format_player_not_found,
     format_rate,
@@ -21,10 +22,11 @@ from orioles_bot.formatting import (
 from orioles_bot.mlb import (
     MlbApiError,
     parse_people,
+    parse_pitching_game_logs,
     parse_player_stats,
     parse_roster,
 )
-from orioles_bot.models import HittingSplit, PitchingSplit, PlayerRef
+from orioles_bot.models import HittingSplit, PitchingGame, PitchingSplit, PlayerRef
 from orioles_bot.player_stats import PlayerStatsService
 
 
@@ -228,6 +230,43 @@ def test_parse_player_stats_ignores_an_unexpected_payload() -> None:
     assert parse_player_stats({"stats": "nope"}) == (None, None)
 
 
+def test_parse_pitching_game_logs_reads_team_result_and_game_line() -> None:
+    games = parse_pitching_game_logs(
+        {
+            "stats": [
+                {
+                    "group": {"displayName": "pitching"},
+                    "splits": [
+                        {
+                            "date": "2026-08-06",
+                            "opponent": {"name": "New York Yankees"},
+                            "isHome": True,
+                            "isWin": True,
+                            "stat": {
+                                "gamesPlayed": 1,
+                                "gamesStarted": 1,
+                                "inningsPitched": "6.2",
+                                "hits": 4,
+                                "runs": 1,
+                                "earnedRuns": 1,
+                                "baseOnBalls": 2,
+                                "strikeOuts": 8,
+                            },
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+
+    assert len(games) == 1
+    assert games[0].opponent == "New York Yankees"
+    assert games[0].is_home is True
+    assert games[0].result == "W"
+    assert games[0].stat.innings_pitched == pytest.approx(6.2)
+    assert games[0].stat.strikeouts == 8
+
+
 def test_format_rate_drops_the_leading_zero() -> None:
     assert format_rate(0.2845) == ".284"
     assert format_rate(1.115) == "1.115"
@@ -294,6 +333,27 @@ def test_format_pitching_split_shows_saves_when_there_are_any() -> None:
     text = format_pitching_split(PitchingSplit(games=3, saves=2, era=0.0))
 
     assert "0-0, 2 SV, 0.00 ERA" in text
+
+
+def test_format_pitching_game_shows_result_location_and_line() -> None:
+    text = format_pitching_game(
+        PitchingGame(
+            game_date=date(2026, 8, 6),
+            opponent="New York Yankees",
+            is_home=True,
+            result="W",
+            stat=PitchingSplit(
+                innings_pitched=6.2,
+                hits=4,
+                runs=1,
+                earned_runs=1,
+                walks=2,
+                strikeouts=8,
+            ),
+        )
+    )
+
+    assert text == "Aug 6 vs New York Yankees — W, 6.2 IP, 4 H, 1 R, 1 ER, 2 BB, 8 K"
 
 
 def test_format_player_not_found_quotes_the_query() -> None:

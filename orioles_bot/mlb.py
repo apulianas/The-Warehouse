@@ -19,6 +19,7 @@ from .models import (
     LineupPlayer,
     NextGame,
     PitcherInfo,
+    PitchingGame,
     PitchingSplit,
     PlayerRef,
     ScheduleWindow,
@@ -229,6 +230,21 @@ class MlbClient:
             },
         )
         return parse_player_stats(data)
+
+    async def fetch_player_pitching_games(
+        self, player_id: int, window: StatsWindow
+    ) -> tuple[PitchingGame, ...]:
+        data = await self._get_json(
+            f"/people/{player_id}/stats",
+            {
+                "stats": "gameLog",
+                "group": "pitching",
+                "startDate": window.start.isoformat(),
+                "endDate": window.end.isoformat(),
+                "sportId": 1,
+            },
+        )
+        return parse_pitching_game_logs(data)
 
     async def fetch_division_standings(
         self, division_id: int = AL_EAST_DIVISION_ID
@@ -910,6 +926,54 @@ def parse_player_stats(
         elif name == "pitching" and pitching is None:
             pitching = parse_pitching_split(stat)
     return hitting, pitching
+
+
+def parse_pitching_game_logs(data: dict[str, Any]) -> tuple[PitchingGame, ...]:
+    groups = data.get("stats")
+    if not isinstance(groups, list):
+        return ()
+
+    games: list[PitchingGame] = []
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        if str((group.get("group") or {}).get("displayName") or "").lower() != "pitching":
+            continue
+        splits = group.get("splits")
+        if not isinstance(splits, list):
+            continue
+        for split in splits:
+            if not isinstance(split, dict):
+                continue
+            stat = split.get("stat")
+            raw_date = split.get("date")
+            opponent = split.get("opponent")
+            if not isinstance(stat, dict) or not isinstance(raw_date, str):
+                continue
+            try:
+                game_date = date.fromisoformat(raw_date)
+            except ValueError:
+                continue
+            opponent_name = (
+                str(opponent.get("name") or "").strip()
+                if isinstance(opponent, dict)
+                else ""
+            )
+            if not opponent_name:
+                opponent_name = "Opponent"
+            result: str | None = None
+            if isinstance(split.get("isWin"), bool):
+                result = "W" if split["isWin"] else "L"
+            games.append(
+                PitchingGame(
+                    game_date=game_date,
+                    opponent=opponent_name,
+                    is_home=bool(split.get("isHome")),
+                    result=result,
+                    stat=parse_pitching_split(stat),
+                )
+            )
+    return tuple(games)
 
 
 def _first_split_stat(group: dict[str, Any]) -> dict[str, Any] | None:
