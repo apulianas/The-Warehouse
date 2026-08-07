@@ -4,6 +4,7 @@ from datetime import date
 
 from orioles_bot.formatting import (
     format_lineup,
+    format_lineup_heading,
     format_no_transactions,
     format_pitchers,
     format_transaction,
@@ -15,6 +16,7 @@ from orioles_bot.mlb import (
     parse_transaction,
     savant_player_url,
     savant_preview_url,
+    savant_team_matchup_url,
 )
 from orioles_bot.models import GameInfo, LineupPlayer, PitcherInfo
 
@@ -169,6 +171,7 @@ def _game_with_pitchers(
         home_team_id=110,
         away_team="New York Yankees",
         opponent="New York Yankees",
+        opponent_team_id=147,
         is_home=True,
         orioles_score=None,
         opponent_score=None,
@@ -182,4 +185,37 @@ def _game_with_pitchers(
 def test_savant_preview_url_uses_game_pk() -> None:
     assert savant_preview_url(823937) == (
         "https://baseballsavant.mlb.com/preview?game_pk=823937"
+    )
+
+
+def test_savant_team_matchup_url_builds_team_versus_pitcher_page() -> None:
+    assert savant_team_matchup_url(110, 119, 808967) == (
+        "https://baseballsavant.mlb.com/player_matchup?"
+        "type=batter&teamPitching=119&teamBatting=110&player_id=808967"
+    )
+
+
+def test_format_lineup_heading_links_team_matchup() -> None:
+    heading = format_lineup_heading(
+        "Baltimore Orioles", 110, 119, PitcherInfo(808967, "Yoshinobu Yamamoto")
+    )
+
+    assert heading == (
+        "**Baltimore Orioles batting order** — "
+        "[full matchup vs Yoshinobu Yamamoto]"
+        f"({savant_team_matchup_url(110, 119, 808967)})"
+    )
+
+
+def test_format_lineup_heading_omits_link_without_opposing_pitcher() -> None:
+    assert format_lineup_heading("Baltimore Orioles", 110, 119, None) == (
+        "**Baltimore Orioles batting order**"
+    )
+
+
+def test_format_lineup_heading_omits_link_without_team_ids() -> None:
+    pitcher = PitcherInfo(808967, "Yoshinobu Yamamoto")
+
+    assert format_lineup_heading("Baltimore Orioles", 110, None, pitcher) == (
+        "**Baltimore Orioles batting order**"
     )
