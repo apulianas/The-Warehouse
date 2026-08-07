@@ -12,6 +12,7 @@ from .models import (
     ORIOLES_TEAM_NAME,
     PitcherInfo,
     TransactionInfo,
+    TransactionPlayer,
 )
 
 
@@ -120,12 +121,52 @@ def format_no_games(target_date: date) -> str:
 
 
 def format_transaction(transaction: TransactionInfo) -> str:
+    description, linked = _linkify_players(
+        transaction.description, transaction.players
+    )
+    if linked:
+        return f"**{transaction.type_description}** — {description}"
+
     player = transaction.player_name
     if player and transaction.player_id is not None:
         player = f"[{player}]({savant_player_url(transaction.player_id)})"
     elif not player:
         player = "Orioles"
-    return f"**{transaction.type_description}** — {player}: {transaction.description}"
+    return f"**{transaction.type_description}** — {player}: {description}"
+
+
+def _linkify_players(
+    description: str, players: tuple[TransactionPlayer, ...]
+) -> tuple[str, bool]:
+    """Link every player named in the description to their Savant page.
+
+    Matches are resolved in a single pass so an inserted link is never
+    rewritten, and longer names win over shorter ones that overlap them.
+    """
+    spans: list[tuple[int, int, TransactionPlayer]] = []
+    for player in players:
+        if not player.name:
+            continue
+        start = description.find(player.name)
+        while start != -1:
+            spans.append((start, start + len(player.name), player))
+            start = description.find(player.name, start + 1)
+
+    spans.sort(key=lambda span: (span[0], span[0] - span[1]))
+
+    pieces: list[str] = []
+    cursor = 0
+    linked = False
+    for start, end, player in spans:
+        if start < cursor:
+            continue
+        url = savant_player_url(player.player_id)
+        pieces.append(description[cursor:start])
+        pieces.append(f"[{description[start:end]}]({url})")
+        cursor = end
+        linked = True
+    pieces.append(description[cursor:])
+    return "".join(pieces), linked
 
 
 def format_no_transactions(target_date: date) -> str:

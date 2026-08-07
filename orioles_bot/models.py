@@ -54,6 +54,12 @@ class GameInfo:
 
 
 @dataclass(frozen=True)
+class TransactionPlayer:
+    player_id: int
+    name: str
+
+
+@dataclass(frozen=True)
 class TransactionInfo:
     transaction_id: str
     date: date
@@ -62,3 +68,4 @@ class TransactionInfo:
     type_description: str
     description: str
     headshot_url: str | None
+    players: tuple[TransactionPlayer, ...] = ()

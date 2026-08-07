@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 from datetime import date, datetime
 from typing import Any
 from urllib.parse import urlencode
@@ -13,6 +14,7 @@ from .models import (
     LineupPlayer,
     PitcherInfo,
     TransactionInfo,
+    TransactionPlayer,
 )
 
 
@@ -164,7 +166,7 @@ class MlbClient:
         transactions = data.get("transactions", [])
         if not isinstance(transactions, list):
             return []
-        return [parse_transaction(item, target_date) for item in transactions]
+        return parse_transactions(transactions, target_date)
 
 
 def parse_game(raw_game: dict[str, Any], boxscore: dict[str, Any] | None = None) -> GameInfo:
@@ -214,6 +216,50 @@ def parse_game(raw_game: dict[str, Any], boxscore: dict[str, Any] | None = None)
     )
 
 
+def parse_transactions(
+    raw_transactions: list[Any], fallback_date: date
+) -> list[TransactionInfo]:
+    """Merge the API's per-player rows into one entry per transaction.
+
+    The transactions endpoint repeats a transaction once per player involved,
+    each row naming a different ``person``. Grouping by transaction id keeps
+    every player and stops multi-player trades posting as duplicates.
+    """
+    grouped: dict[str, TransactionInfo] = {}
+    players: dict[str, list[TransactionPlayer]] = {}
+    for raw in raw_transactions:
+        if not isinstance(raw, dict):
+            continue
+        parsed = parse_transaction(raw, fallback_date)
+        key = parsed.transaction_id
+        collected = players.setdefault(key, [])
+        for player in parsed.players:
+            if all(existing.player_id != player.player_id for existing in collected):
+                collected.append(player)
+        existing_entry = grouped.get(key)
+        if existing_entry is None:
+            grouped[key] = parsed
+        elif existing_entry.player_id is None and parsed.player_id is not None:
+            grouped[key] = parsed
+
+    return [
+        replace(
+            entry,
+            players=tuple(players[key]),
+            player_id=entry.player_id
+            if entry.player_id is not None
+            else (players[key][0].player_id if players[key] else None),
+            player_name=entry.player_name
+            if entry.player_name is not None
+            else (players[key][0].name if players[key] else None),
+            headshot_url=entry.headshot_url
+            if entry.headshot_url is not None
+            else (headshot_url(players[key][0].player_id) if players[key] else None),
+        )
+        for key, entry in grouped.items()
+    ]
+
+
 def parse_transaction(raw: dict[str, Any], fallback_date: date) -> TransactionInfo:
     person = raw.get("person") if isinstance(raw.get("person"), dict) else {}
     player_id = _safe_int(person.get("id"))
@@ -242,6 +288,11 @@ def parse_transaction(raw: dict[str, Any], fallback_date: date) -> TransactionIn
         type_description=type_description,
         description=description,
         headshot_url=headshot_url(player_id) if player_id is not None else None,
+        players=(
+            (TransactionPlayer(player_id, player_name),)
+            if player_id is not None and player_name
+            else ()
+        ),
     )
 
 
