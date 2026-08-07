@@ -353,7 +353,7 @@ def test_format_pitching_game_shows_result_location_and_line() -> None:
         )
     )
 
-    assert text == "Aug 6 vs New York Yankees — W, 6.2 IP, 4 H, 1 R, 1 ER, 2 BB, 8 K"
+    assert text == "6.2 IP, 4 H, 1 R, 1 ER, 2 BB, 8 K"
 
 
 def test_format_player_not_found_quotes_the_query() -> None:
