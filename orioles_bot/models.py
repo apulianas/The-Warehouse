@@ -43,6 +43,7 @@ class GameInfo:
     home_team_id: int | None
     away_team: str
     opponent: str
+    opponent_team_id: int | None
     is_home: bool
     orioles_score: int | None
     opponent_score: int | None

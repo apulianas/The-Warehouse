@@ -10,13 +10,20 @@ from .formatting import (
     format_game_time,
     format_game_title,
     format_lineup,
+    format_lineup_heading,
     format_no_games,
     format_no_transactions,
     format_pitchers,
     format_transaction,
 )
 from .mlb import savant_preview_url, team_logo_url
-from .models import GameInfo, MatchupAnnotation, ORIOLES_TEAM_NAME, TransactionInfo
+from .models import (
+    GameInfo,
+    MatchupAnnotation,
+    ORIOLES_TEAM_ID,
+    ORIOLES_TEAM_NAME,
+    TransactionInfo,
+)
 
 
 ORIOLES_ORANGE = discord.Color.from_rgb(223, 70, 1)
@@ -50,11 +57,23 @@ def lineup_embeds(
         opponent_lineup = format_lineup(
             game.opponent_lineup, game.pitcher, matchup_annotations
         )
+        orioles_heading = format_lineup_heading(
+            ORIOLES_TEAM_NAME,
+            ORIOLES_TEAM_ID,
+            game.opponent_team_id,
+            game.opponent_pitcher,
+        )
+        opponent_heading = format_lineup_heading(
+            game.opponent,
+            game.opponent_team_id,
+            ORIOLES_TEAM_ID,
+            game.pitcher,
+        )
         preview_link = f"[Statcast game preview]({savant_preview_url(game.game_pk)})"
         body = (
             f"{header}\n\n"
-            f"**{ORIOLES_TEAM_NAME} batting order**\n{orioles_lineup}\n\n"
-            f"**{game.opponent} batting order**\n{opponent_lineup}"
+            f"{orioles_heading}\n{orioles_lineup}\n\n"
+            f"{opponent_heading}\n{opponent_lineup}"
         )
         suffix = f"\n\n{preview_link}"
         description = f"{_limit_description(body, 4096 - len(suffix))}{suffix}"

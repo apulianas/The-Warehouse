@@ -10,8 +10,9 @@ A Dockerized Python 3.12 Discord bot that posts Baltimore Orioles lineups and ro
   - `/help` — command help.
 - Discord embeds with game status, venue, score when available, both batting orders, positions, both starting pitchers, transaction details, and hot/cold matchup emojis with the underlying wOBA and plate appearances when enough history exists.
 - Every player name — batters, both starters, and transaction players — links to their Baseball Savant player page.
-- Each lineup embed links to the Statcast game preview for that game, which shows both lineups with advanced metrics and batter-versus-pitcher splits.
-- Batter-versus-pitcher history is fetched from Baseball Savant and rendered inline rather than linked, because the Statcast search page cannot be deep-linked with a pre-filled matchup filter.
+- Each batting order links to the Baseball Savant Player Matchup page for that lineup versus the opposing starter, showing every hitter's career history against him.
+- Each lineup embed also links to the Statcast game preview for that game.
+- Batter-versus-pitcher summaries are fetched from Baseball Savant and rendered inline, so the hot/cold read is visible without leaving Discord.
 - Both batting orders render as single 1-9 lists in one embed.
 - The embed thumbnail shows the home team's logo for the ballpark hosting the game.
 - Background polling for today's lineup and transaction updates.
@@ -72,13 +73,13 @@ Status: Pre-Game
 Baltimore Orioles starter: Zach Eflin (Probable pitcher)
 New York Yankees starter: Max Fried (Probable pitcher)
 
-Baltimore Orioles batting order
+Baltimore Orioles batting order — full matchup vs Max Fried
 1. SS Gunnar Henderson 🔥 (.450 wOBA, 8 PA)
 2. C Adley Rutschman
 3. RF Anthony Santander
 ...
 
-New York Yankees batting order
+New York Yankees batting order — full matchup vs Zach Eflin
 1. RF Aaron Judge 🧊 (.267 wOBA, 24 PA)
 2. DH Giancarlo Stanton
 ...

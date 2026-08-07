@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from datetime import date
 from zoneinfo import ZoneInfo
 
-from .mlb import savant_player_url
+from .mlb import savant_player_url, savant_team_matchup_url
 from .models import (
     GameInfo,
     LineupPlayer,
@@ -52,6 +52,26 @@ def _format_pitcher_line(team: str, pitcher: PitcherInfo | None) -> str:
     else:
         name = pitcher.name
     return f"{team} starter: {name} ({pitcher.status})"
+
+
+def format_lineup_heading(
+    batting_team: str,
+    batting_team_id: int | None,
+    pitching_team_id: int | None,
+    opposing_pitcher: PitcherInfo | None,
+) -> str:
+    heading = f"**{batting_team} batting order**"
+    if (
+        batting_team_id is None
+        or pitching_team_id is None
+        or opposing_pitcher is None
+        or opposing_pitcher.player_id is None
+    ):
+        return heading
+    url = savant_team_matchup_url(
+        batting_team_id, pitching_team_id, opposing_pitcher.player_id
+    )
+    return f"{heading} — [full matchup vs {opposing_pitcher.name}]({url})"
 
 
 def format_lineup(
