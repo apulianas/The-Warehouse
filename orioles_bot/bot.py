@@ -11,11 +11,15 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
+from .cache import AsyncTtlCache
 from .config import BotConfig, load_config, webhook_id
 from .dates import (
+    MAX_SCHEDULE_WINDOW_DAYS,
     MAX_STATS_WINDOW_DAYS,
+    MIN_SCHEDULE_WINDOW_DAYS,
     MIN_STATS_WINDOW_DAYS,
     parse_user_date,
+    schedule_window,
     stats_window,
     today_in_zone,
 )
@@ -24,12 +28,20 @@ from .embeds import (
     help_embed,
     lineup_embeds,
     player_stats_embed,
+    schedule_embeds,
+    standings_embed,
     transaction_embeds,
 )
 from .formatting import format_player_not_found
 from .matchups import MatchupService
 from .mlb import MlbApiError, MlbClient
-from .models import GameInfo, TransactionInfo
+from .models import (
+    AL_EAST_DIVISION_ID,
+    DivisionStandings,
+    GameInfo,
+    NextGame,
+    TransactionInfo,
+)
 from .player_stats import PlayerStatsService
 from .state import AnnouncementState, channel_key
 
@@ -37,9 +49,18 @@ from .state import AnnouncementState, channel_key
 LOGGER = logging.getLogger(__name__)
 
 DEFAULT_STATS_DAYS = 7
+DEFAULT_SCHEDULE_DAYS = 7
+# Standings move only when games end, and a schedule barely moves at all, so a
+# few minutes of staleness is invisible while sparing the API a request per use.
+STANDINGS_TTL_SECONDS = 300
+SCHEDULE_TTL_SECONDS = 300
 StatsDays = app_commands.Range[
     int, MIN_STATS_WINDOW_DAYS, MAX_STATS_WINDOW_DAYS
 ]
+ScheduleDays = app_commands.Range[
+    int, MIN_SCHEDULE_WINDOW_DAYS, MAX_SCHEDULE_WINDOW_DAYS
+]
+StandingsPayload = tuple[DivisionStandings | None, dict[int, NextGame]]
 
 
 def webhook_label(url: str) -> str:
@@ -62,6 +83,12 @@ class OriolesBot(commands.Bot):
         self.mlb: MlbClient | None = None
         self.matchups = MatchupService(config.matchup_min_pa)
         self.player_stats = PlayerStatsService()
+        self.standings_cache: AsyncTtlCache[int, StandingsPayload] = AsyncTtlCache(
+            STANDINGS_TTL_SECONDS
+        )
+        self.schedule_cache: AsyncTtlCache[tuple[str, str], list[GameInfo]] = (
+            AsyncTtlCache(SCHEDULE_TTL_SECONDS)
+        )
         self.announcement_state = AnnouncementState(config.state_file)
 
     async def setup_hook(self) -> None:
@@ -75,6 +102,8 @@ class OriolesBot(commands.Bot):
         self.tree.add_command(_lineup_command(self))
         self.tree.add_command(_transactions_command(self))
         self.tree.add_command(_player_stats_command(self))
+        self.tree.add_command(_standings_command(self))
+        self.tree.add_command(_schedule_command(self))
         self.tree.add_command(_help_command())
         await self.tree.sync()
         if self.config.has_announcement_targets:
@@ -301,6 +330,90 @@ def _player_stats_command(bot: OriolesBot) -> app_commands.Command[Any, ..., Non
         ]
 
     return playerstats
+
+
+def _standings_command(bot: OriolesBot) -> app_commands.Command[Any, ..., None]:
+    @app_commands.command(
+        name="standings", description="Show the AL East standings and next opponents."
+    )
+    async def standings(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+        client = _require_mlb(bot)
+        try:
+            division, next_games = await bot.standings_cache.get_or_fetch(
+                AL_EAST_DIVISION_ID,
+                lambda: _fetch_standings_payload(bot, client),
+            )
+        except MlbApiError as exc:
+            await interaction.followup.send(embed=error_embed(str(exc)), ephemeral=True)
+            return
+
+        await interaction.followup.send(
+            embed=standings_embed(division, next_games, bot.config.time_zone)
+        )
+
+    return standings
+
+
+async def _fetch_standings_payload(
+    bot: OriolesBot, client: MlbClient
+) -> StandingsPayload:
+    """Standings plus each team's next game, fetched together so they cache as one.
+
+    The next-game lookup is best effort: a failure there should still leave the
+    standings postable rather than turning the whole command into an error.
+    """
+    division = await client.fetch_division_standings(AL_EAST_DIVISION_ID)
+    if division is None or not division.teams:
+        return division, {}
+
+    try:
+        next_games = await client.fetch_next_games(
+            [record.team_id for record in division.teams],
+            today_in_zone(bot.config.time_zone),
+        )
+    except MlbApiError as exc:
+        LOGGER.warning("Standings posted without next games: %s", exc)
+        next_games = {}
+    return division, next_games
+
+
+def _schedule_command(bot: OriolesBot) -> app_commands.Command[Any, ..., None]:
+    @app_commands.command(
+        name="schedule", description="Show upcoming Orioles games."
+    )
+    @app_commands.describe(
+        days=(
+            f"How many days ahead ({MIN_SCHEDULE_WINDOW_DAYS}-"
+            f"{MAX_SCHEDULE_WINDOW_DAYS}, default {DEFAULT_SCHEDULE_DAYS})"
+        )
+    )
+    async def schedule(
+        interaction: discord.Interaction,
+        days: ScheduleDays = DEFAULT_SCHEDULE_DAYS,
+    ) -> None:
+        try:
+            window = schedule_window(days, bot.config.time_zone)
+        except ValueError as exc:
+            await interaction.response.send_message(str(exc), ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        client = _require_mlb(bot)
+        key = (window.start.isoformat(), window.end.isoformat())
+        try:
+            games = await bot.schedule_cache.get_or_fetch(
+                key, lambda: client.fetch_schedule(window)
+            )
+        except MlbApiError as exc:
+            await interaction.followup.send(embed=error_embed(str(exc)), ephemeral=True)
+            return
+
+        await interaction.followup.send(
+            embeds=schedule_embeds(games, window, bot.config.time_zone)
+        )
+
+    return schedule
 
 
 def _help_command() -> app_commands.Command[Any, ..., None]:

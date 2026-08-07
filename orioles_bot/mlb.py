@@ -1,22 +1,29 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Sequence
 from dataclasses import replace
-from datetime import date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from urllib.parse import urlencode
 
 import aiohttp
 
 from .models import (
+    AL_EAST_DIVISION_ID,
+    AMERICAN_LEAGUE_ID,
     ORIOLES_TEAM_ID,
+    DivisionStandings,
     GameInfo,
     HittingSplit,
     LineupPlayer,
+    NextGame,
     PitcherInfo,
     PitchingSplit,
     PlayerRef,
+    ScheduleWindow,
     StatsWindow,
+    TeamRecord,
     TransactionInfo,
     TransactionPlayer,
 )
@@ -38,6 +45,11 @@ BASEBALL_SAVANT_PREVIEW_URL = "https://baseballsavant.mlb.com/preview"
 BASEBALL_SAVANT_PLAYER_MATCHUP_URL = "https://baseballsavant.mlb.com/player_matchup"
 TEAM_LOGO_URL_TEMPLATE = "https://midfield.mlbstatic.com/v1/team/{team_id}/spots/240"
 PLAYER_SEARCH_LIMIT = 25
+NEXT_GAME_LOOKAHEAD_DAYS = 10
+# A game in one of these states is behind the team, so it is never "next". An
+# in-progress game still counts, since that is what the team is playing now.
+FINISHED_GAME_STATES = {"final", "game over", "completed early", "completed"}
+UNPLAYED_GAME_STATES = {"postponed", "cancelled", "canceled", "suspended"}
 
 
 class MlbApiError(RuntimeError):
@@ -216,6 +228,325 @@ class MlbClient:
             },
         )
         return parse_player_stats(data)
+
+    async def fetch_division_standings(
+        self, division_id: int = AL_EAST_DIVISION_ID
+    ) -> DivisionStandings | None:
+        """Standings for one division, defaulting to the AL East.
+
+        The season is left to the API so the current one is always used; asking
+        for a specific year would go stale every January.
+        """
+        data = await self._get_json(
+            "/standings",
+            {
+                "leagueId": AMERICAN_LEAGUE_ID,
+                "standingsTypes": "regularSeason",
+                "hydrate": "division,team",
+            },
+        )
+        return parse_standings(data, division_id)
+
+    async def fetch_schedule(self, window: ScheduleWindow) -> list[GameInfo]:
+        """Scheduled games across a date range.
+
+        Unlike ``fetch_games`` this skips the per-game boxscore call: a schedule
+        only needs probable starters, and hydrating N days of boxscores would
+        multiply request volume for data that is not rendered.
+        """
+        schedule = await self._get_json(
+            "/schedule",
+            {
+                "sportId": 1,
+                "teamId": ORIOLES_TEAM_ID,
+                "startDate": window.start.isoformat(),
+                "endDate": window.end.isoformat(),
+                "hydrate": "probablePitcher,team,linescore,flags",
+            },
+        )
+        return parse_schedule(schedule)
+
+    async def fetch_next_games(
+        self, team_ids: Sequence[int], start: date, days: int = NEXT_GAME_LOOKAHEAD_DAYS
+    ) -> dict[int, NextGame]:
+        """The next upcoming game for each of several teams, in one request.
+
+        The schedule endpoint accepts a comma-separated team list, so a whole
+        division costs one call rather than one per team. The window extends
+        past the request date because an off day, or the All-Star break, can
+        leave a team without a game for several days.
+        """
+        ids = [team_id for team_id in dict.fromkeys(team_ids)]
+        if not ids:
+            return {}
+        schedule = await self._get_json(
+            "/schedule",
+            {
+                "sportId": 1,
+                "teamId": ",".join(str(team_id) for team_id in ids),
+                "startDate": start.isoformat(),
+                "endDate": (start + timedelta(days=max(days, 1) - 1)).isoformat(),
+                "hydrate": "team",
+            },
+        )
+        return parse_next_games(schedule, ids)
+
+
+def parse_next_games(
+    schedule: dict[str, Any], team_ids: Sequence[int]
+) -> dict[int, NextGame]:
+    """Pick each team's earliest game that has not already finished.
+
+    A team appears in two rows of a division schedule when it plays a division
+    rival, so both sides of every game are considered and the earliest surviving
+    start time wins.
+    """
+    wanted = set(team_ids)
+    dates = schedule.get("dates")
+    if not isinstance(dates, list) or not wanted:
+        return {}
+
+    best: dict[int, tuple[tuple[int, float, int], NextGame]] = {}
+    for day in dates:
+        if not isinstance(day, dict):
+            continue
+        raw_games = day.get("games")
+        if not isinstance(raw_games, list):
+            continue
+        for raw_game in raw_games:
+            if not isinstance(raw_game, dict):
+                continue
+            if not _is_upcoming(raw_game):
+                continue
+            for team_id, entry in _next_game_sides(raw_game, wanted):
+                sort_key = _next_game_sort_key(entry, raw_game)
+                current = best.get(team_id)
+                if current is None or sort_key < current[0]:
+                    best[team_id] = (sort_key, entry)
+
+    return {team_id: entry for team_id, (_, entry) in best.items()}
+
+
+def _is_upcoming(raw_game: dict[str, Any]) -> bool:
+    status = raw_game.get("status")
+    status = status if isinstance(status, dict) else {}
+    detailed = str(status.get("detailedState") or "").strip().casefold()
+    abstract = str(status.get("abstractGameState") or "").strip().casefold()
+    if detailed in UNPLAYED_GAME_STATES:
+        return False
+    if detailed in FINISHED_GAME_STATES or abstract == "final":
+        return False
+    return True
+
+
+def _next_game_sides(
+    raw_game: dict[str, Any], wanted: set[int]
+) -> list[tuple[int, NextGame]]:
+    teams = raw_game.get("teams")
+    teams = teams if isinstance(teams, dict) else {}
+    status = raw_game.get("status")
+    status = status if isinstance(status, dict) else {}
+    game_date = _parse_game_datetime(raw_game.get("gameDate"))
+
+    entries: list[tuple[int, NextGame]] = []
+    for side in ("home", "away"):
+        other_side = "away" if side == "home" else "home"
+        team = _schedule_team(teams, side)
+        opponent = _schedule_team(teams, other_side)
+        team_id = _safe_int(team.get("id"))
+        if team_id is None or team_id not in wanted:
+            continue
+        entries.append(
+            (
+                team_id,
+                NextGame(
+                    team_id=team_id,
+                    opponent=str(opponent.get("name") or "Opponent TBD"),
+                    opponent_abbreviation=_optional_text(opponent.get("abbreviation")),
+                    opponent_team_id=_safe_int(opponent.get("id")),
+                    is_home=side == "home",
+                    game_date=game_date,
+                    status=str(status.get("detailedState") or "Scheduled"),
+                ),
+            )
+        )
+    return entries
+
+
+def _schedule_team(teams: dict[str, Any], side: str) -> dict[str, Any]:
+    entry = teams.get(side)
+    entry = entry if isinstance(entry, dict) else {}
+    team = entry.get("team")
+    return team if isinstance(team, dict) else {}
+
+
+def _next_game_sort_key(
+    entry: NextGame, raw_game: dict[str, Any]
+) -> tuple[int, float, int]:
+    game_pk = _safe_int(raw_game.get("gamePk")) or 0
+    if entry.game_date is None:
+        return (1, 0.0, game_pk)
+    game_date = entry.game_date
+    if game_date.tzinfo is None:
+        game_date = game_date.replace(tzinfo=UTC)
+    return (0, game_date.timestamp(), game_pk)
+
+
+def _parse_game_datetime(raw: Any) -> datetime | None:
+    if not isinstance(raw, str):
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def parse_schedule(schedule: dict[str, Any]) -> list[GameInfo]:
+    """Flatten a date-range schedule payload into games in chronological order.
+
+    The API already returns dates in order, but a game whose ``gameDate`` failed
+    to parse must not jump the queue, so those sort last instead of raising.
+    """
+    dates = schedule.get("dates")
+    if not isinstance(dates, list):
+        return []
+
+    games: list[GameInfo] = []
+    for day in dates:
+        if not isinstance(day, dict):
+            continue
+        raw_games = day.get("games")
+        if not isinstance(raw_games, list):
+            continue
+        for raw_game in raw_games:
+            if isinstance(raw_game, dict):
+                games.append(parse_game(raw_game))
+
+    return sorted(games, key=_schedule_sort_key)
+
+
+def _schedule_sort_key(game: GameInfo) -> tuple[int, float, int]:
+    """Chronological order, tolerating unparsed and naive start times.
+
+    A game whose ``gameDate`` could not be parsed sorts last rather than
+    breaking the comparison, and a naive timestamp is read as UTC so it never
+    raises against the aware ones alongside it.
+    """
+    game_date = game.game_date
+    if game_date is None:
+        return (1, 0.0, game.game_pk)
+    if game_date.tzinfo is None:
+        game_date = game_date.replace(tzinfo=UTC)
+    return (0, game_date.timestamp(), game.game_pk)
+
+
+def parse_standings(
+    data: dict[str, Any], division_id: int = AL_EAST_DIVISION_ID
+) -> DivisionStandings | None:
+    """Pull one division's records out of a league-wide standings payload."""
+    records = data.get("records")
+    if not isinstance(records, list):
+        return None
+
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        division = record.get("division")
+        division = division if isinstance(division, dict) else {}
+        if _safe_int(division.get("id")) != division_id:
+            continue
+
+        teams = parse_team_records(record.get("teamRecords"))
+        return DivisionStandings(
+            division_id=division_id,
+            division_name=str(
+                division.get("nameShort") or division.get("name") or "Division"
+            ),
+            teams=teams,
+            season=_optional_text(record.get("season"))
+            or _optional_text(division.get("season"))
+            or _first_team_season(record.get("teamRecords")),
+        )
+    return None
+
+
+def _first_team_season(raw_records: Any) -> str | None:
+    """Season year, which the API reports per team record rather than per division."""
+    if not isinstance(raw_records, list):
+        return None
+    for raw in raw_records:
+        if isinstance(raw, dict):
+            season = _optional_text(raw.get("season"))
+            if season:
+                return season
+    return None
+
+
+def parse_team_records(raw_records: Any) -> tuple[TeamRecord, ...]:
+    if not isinstance(raw_records, list):
+        return ()
+
+    records: list[TeamRecord] = []
+    for raw in raw_records:
+        if not isinstance(raw, dict):
+            continue
+        team = raw.get("team")
+        team = team if isinstance(team, dict) else {}
+        team_id = _safe_int(team.get("id"))
+        if team_id is None:
+            continue
+        league_record = raw.get("leagueRecord")
+        league_record = league_record if isinstance(league_record, dict) else {}
+        records.append(
+            TeamRecord(
+                team_id=team_id,
+                team_name=str(team.get("name") or f"Team {team_id}"),
+                wins=_safe_int(raw.get("wins"))
+                or _safe_int(league_record.get("wins"))
+                or 0,
+                losses=_safe_int(raw.get("losses"))
+                or _safe_int(league_record.get("losses"))
+                or 0,
+                winning_percentage=_optional_text(raw.get("winningPercentage"))
+                or _optional_text(league_record.get("pct")),
+                division_rank=_optional_text(raw.get("divisionRank")),
+                games_back=_optional_text(raw.get("gamesBack")),
+                wild_card_games_back=_optional_text(raw.get("wildCardGamesBack")),
+                streak=_parse_streak(raw.get("streak")),
+                run_differential=_safe_int(raw.get("runDifferential")),
+                division_leader=bool(raw.get("divisionLeader")),
+                clinch_indicator=_optional_text(raw.get("clinchIndicator")),
+            )
+        )
+
+    return tuple(
+        sorted(records, key=lambda record: _rank_sort_key(record))
+    )
+
+
+def _rank_sort_key(record: TeamRecord) -> tuple[int, float, int]:
+    """Order by division rank, falling back to win total when rank is absent.
+
+    Rank arrives as a string and is missing entirely before the season starts,
+    so an unranked team sorts by record rather than landing at the top.
+    """
+    rank = _safe_int(record.division_rank)
+    if rank is not None:
+        return (0, float(rank), -record.wins)
+    return (1, 0.0, -record.wins)
+
+
+def _parse_streak(raw: Any) -> str | None:
+    if isinstance(raw, dict):
+        return _optional_text(raw.get("streakCode"))
+    return _optional_text(raw)
+
+
+def _optional_text(value: Any) -> str | None:
+    if value is None or isinstance(value, bool):
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def parse_game(raw_game: dict[str, Any], boxscore: dict[str, Any] | None = None) -> GameInfo:
