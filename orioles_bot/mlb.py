@@ -244,7 +244,69 @@ class MlbClient:
                 "sportId": 1,
             },
         )
-        return parse_pitching_game_logs(data)
+        games = parse_pitching_game_logs(data)
+        team_ids = {game.team_id for game in games if game.team_id is not None}
+        if not team_ids:
+            return games
+
+        schedule = await self._get_json(
+            "/schedule",
+            {
+                "sportId": 1,
+                "teamId": min(team_ids),
+                "startDate": window.start.isoformat(),
+                "endDate": window.end.isoformat(),
+                "hydrate": "team,linescore",
+            },
+        )
+        scores: dict[int, tuple[int, int]] = {}
+        for day in schedule.get("dates", []):
+            if not isinstance(day, dict):
+                continue
+            for raw_game in day.get("games", []):
+                if not isinstance(raw_game, dict):
+                    continue
+                game_pk = _safe_int(raw_game.get("gamePk"))
+                linescore = raw_game.get("linescore")
+                teams = linescore.get("teams") if isinstance(linescore, dict) else None
+                home = teams.get("home") if isinstance(teams, dict) else None
+                away = teams.get("away") if isinstance(teams, dict) else None
+                if (
+                    game_pk is None
+                    or not isinstance(home, dict)
+                    or not isinstance(away, dict)
+                ):
+                    continue
+                raw_teams = raw_game.get("teams")
+                if not isinstance(raw_teams, dict):
+                    continue
+                home_team = raw_teams.get("home")
+                away_team = raw_teams.get("away")
+                if not isinstance(home_team, dict) or not isinstance(away_team, dict):
+                    continue
+                home_id = _safe_int(home_team.get("team", {}).get("id"))
+                away_id = _safe_int(away_team.get("team", {}).get("id"))
+                home_score = _safe_int(home.get("runs"))
+                away_score = _safe_int(away.get("runs"))
+                if (
+                    home_id is None
+                    or away_id is None
+                    or home_score is None
+                    or away_score is None
+                ):
+                    continue
+                scores[game_pk] = (
+                    home_score if home_id in team_ids else away_score,
+                    away_score if home_id in team_ids else home_score,
+                )
+        return tuple(
+            replace(
+                game,
+                team_score=scores.get(game.game_pk, (None, None))[0],
+                opponent_score=scores.get(game.game_pk, (None, None))[1],
+            )
+            for game in games
+        )
 
     async def fetch_division_standings(
         self, division_id: int = AL_EAST_DIVISION_ID
@@ -964,6 +1026,8 @@ def parse_pitching_game_logs(data: dict[str, Any]) -> tuple[PitchingGame, ...]:
             result: str | None = None
             if isinstance(split.get("isWin"), bool):
                 result = "W" if split["isWin"] else "L"
+            game = split.get("game")
+            team = split.get("team")
             decision = "No decision"
             if _stat_int(stat, "wins"):
                 decision = "Win"
@@ -977,6 +1041,12 @@ def parse_pitching_game_logs(data: dict[str, Any]) -> tuple[PitchingGame, ...]:
                     result=result,
                     stat=parse_pitching_split(stat),
                     decision=decision,
+                    game_pk=_safe_int(game.get("gamePk"))
+                    if isinstance(game, dict)
+                    else None,
+                    team_id=_safe_int(team.get("id"))
+                    if isinstance(team, dict)
+                    else None,
                 )
             )
     return tuple(games)

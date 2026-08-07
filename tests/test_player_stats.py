@@ -242,6 +242,8 @@ def test_parse_pitching_game_logs_reads_team_result_and_game_line() -> None:
                             "opponent": {"name": "New York Yankees"},
                             "isHome": True,
                             "isWin": True,
+                            "team": {"id": 110},
+                            "game": {"gamePk": 123456},
                             "stat": {
                                 "gamesPlayed": 1,
                                 "gamesStarted": 1,
@@ -265,6 +267,8 @@ def test_parse_pitching_game_logs_reads_team_result_and_game_line() -> None:
     assert games[0].is_home is True
     assert games[0].result == "W"
     assert games[0].decision == "Win"
+    assert games[0].game_pk == 123456
+    assert games[0].team_id == 110
     assert games[0].stat.innings_pitched == pytest.approx(6.2)
     assert games[0].stat.strikeouts == 8
 
