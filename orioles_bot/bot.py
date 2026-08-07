@@ -16,7 +16,7 @@ from .embeds import error_embed, help_embed, lineup_embeds, transaction_embeds
 from .matchups import MatchupService
 from .mlb import MlbApiError, MlbClient
 from .models import GameInfo, TransactionInfo
-from .state import AnnouncementState
+from .state import AnnouncementState, channel_key
 
 
 LOGGER = logging.getLogger(__name__)
@@ -36,16 +36,22 @@ class OriolesBot(commands.Bot):
         self.session = aiohttp.ClientSession()
         self.mlb = MlbClient(self.session)
         self.announcement_state.load()
+        if self.config.discord_channel_ids:
+            self.announcement_state.adopt_legacy_keys(
+                self.config.discord_channel_ids[0]
+            )
         self.tree.add_command(_lineup_command(self))
         self.tree.add_command(_transactions_command(self))
         self.tree.add_command(_help_command())
         await self.tree.sync()
-        if self.config.discord_channel_id is not None:
+        if self.config.discord_channel_ids:
             self.poll_updates.change_interval(seconds=self.config.poll_interval_seconds)
             self.poll_updates.start()
             LOGGER.info(
-                "Started update polling every %s seconds",
+                "Started update polling every %s seconds for %s channel(s): %s",
                 self.config.poll_interval_seconds,
+                len(self.config.discord_channel_ids),
+                ", ".join(str(item) for item in self.config.discord_channel_ids),
             )
 
     async def close(self) -> None:
@@ -60,14 +66,11 @@ class OriolesBot(commands.Bot):
 
     @tasks.loop(seconds=300)
     async def poll_updates(self) -> None:
-        if self.config.discord_channel_id is None or self.mlb is None:
+        if not self.config.discord_channel_ids or self.mlb is None:
             return
 
-        channel = self.get_channel(self.config.discord_channel_id)
-        if channel is None:
-            channel = await self.fetch_channel(self.config.discord_channel_id)
-        if not isinstance(channel, discord.abc.Messageable):
-            LOGGER.warning("Configured DISCORD_CHANNEL_ID is not messageable")
+        channels = await self._announcement_channels()
+        if not channels:
             return
 
         target_date = today_in_zone(self.config.time_zone)
@@ -82,27 +85,70 @@ class OriolesBot(commands.Bot):
             if not game.lineup or not game.opponent_lineup:
                 continue
             key = lineup_announcement_key(target_date, game)
-            if key and self.announcement_state.unseen(key):
-                matchup_annotations = await self.matchups.fetch_for_games([game])
-                await channel.send(
-                    content="Orioles lineup update",
-                    embeds=lineup_embeds(
-                        [game],
-                        target_date,
-                        self.config.time_zone,
-                        matchup_annotations,
-                    ),
+            if not key:
+                continue
+            pending = [
+                (channel_id, channel)
+                for channel_id, channel in channels
+                if self.announcement_state.unseen(channel_key(key, channel_id))
+            ]
+            if not pending:
+                continue
+            matchup_annotations = await self.matchups.fetch_for_games([game])
+            embeds = lineup_embeds(
+                [game], target_date, self.config.time_zone, matchup_annotations
+            )
+            for channel_id, channel in pending:
+                await self._announce(
+                    channel, channel_id, key, "Orioles lineup update", embeds
                 )
-                self.announcement_state.mark(key)
 
         for transaction in transactions:
             key = transaction_announcement_key(transaction)
-            if self.announcement_state.unseen(key):
-                await channel.send(
-                    content="Orioles roster transaction",
-                    embeds=transaction_embeds([transaction], target_date),
-                )
-                self.announcement_state.mark(key)
+            embeds = transaction_embeds([transaction], target_date)
+            for channel_id, channel in channels:
+                if self.announcement_state.unseen(channel_key(key, channel_id)):
+                    await self._announce(
+                        channel,
+                        channel_id,
+                        key,
+                        "Orioles roster transaction",
+                        embeds,
+                    )
+
+    async def _announcement_channels(
+        self,
+    ) -> list[tuple[int, discord.abc.Messageable]]:
+        channels: list[tuple[int, discord.abc.Messageable]] = []
+        for channel_id in self.config.discord_channel_ids:
+            channel = self.get_channel(channel_id)
+            if channel is None:
+                try:
+                    channel = await self.fetch_channel(channel_id)
+                except discord.DiscordException as exc:
+                    LOGGER.warning("Channel %s is unavailable: %s", channel_id, exc)
+                    continue
+            if not isinstance(channel, discord.abc.Messageable):
+                LOGGER.warning("Channel %s is not messageable", channel_id)
+                continue
+            channels.append((channel_id, channel))
+        return channels
+
+    async def _announce(
+        self,
+        channel: discord.abc.Messageable,
+        channel_id: int,
+        key: str,
+        content: str,
+        embeds: list[discord.Embed],
+    ) -> None:
+        """Post to one channel, marking it sent only for that channel."""
+        try:
+            await channel.send(content=content, embeds=embeds)
+        except discord.DiscordException as exc:
+            LOGGER.warning("Could not post to channel %s: %s", channel_id, exc)
+            return
+        self.announcement_state.mark(channel_key(key, channel_id))
 
     @poll_updates.before_loop
     async def before_poll_updates(self) -> None:

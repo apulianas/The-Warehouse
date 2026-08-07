@@ -34,12 +34,29 @@ docker compose up --build
 
 The compose file mounts a named volume at `/data` so announced lineup and transaction IDs survive container restarts.
 
+### Posting to more than one channel
+
+Set `DISCORD_CHANNEL_ID` to a comma-separated list, then restart:
+
+```env
+DISCORD_CHANNEL_ID=123456789012345678,987654321098765432
+```
+
+```bash
+docker compose up -d
+```
+
+Each channel is tracked separately, so a channel you add later starts posting from the
+next update rather than replaying everything the first channel already announced, and a
+channel the bot cannot reach is retried instead of being silently marked as sent. The bot
+needs View Channel, Send Messages, and Embed Links in every channel you list.
+
 ## Environment variables
 
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
 | `DISCORD_TOKEN` | Yes | | Discord bot token. Never commit it. |
-| `DISCORD_CHANNEL_ID` | No | | Channel ID for background polling announcements. |
+| `DISCORD_CHANNEL_ID` | No | | Channel ID for background polling announcements. Separate multiple IDs with commas to post the same updates to several channels. |
 | `POLL_INTERVAL_SECONDS` | No | `300` | Poll interval for today's updates. Minimum 30 seconds. |
 | `MATCHUP_MIN_PA` | No | `5` | Minimum historical plate appearances versus the opposing starter before a hot/cold emoji is shown. |
 | `TIME_ZONE` | No | `America/New_York` | Time zone used for "today" and display times. |
