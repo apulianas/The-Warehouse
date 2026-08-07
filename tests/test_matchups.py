@@ -244,3 +244,28 @@ def test_announcement_state_adopts_legacy_keys(tmp_path) -> None:
     reloaded = AnnouncementState(str(path))
     reloaded.load()
     assert not reloaded.unseen(channel_key("lineup:1", 111))
+
+
+def test_webhook_id_never_exposes_the_token() -> None:
+    from orioles_bot.bot import webhook_id, webhook_label
+
+    url = "https://discord.com/api/webhooks/12345678901234567/super-secret-tokenxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+    assert webhook_id(url) == "12345678901234567"
+    assert webhook_label(url) == "webhook 12345678901234567"
+    assert "super-secret-token" not in webhook_label(url)
+
+
+def test_webhook_state_key_excludes_the_token(tmp_path) -> None:
+    from orioles_bot.bot import webhook_id
+    from orioles_bot.state import AnnouncementState, channel_key
+
+    url = "https://discord.com/api/webhooks/12345678901234567/super-secret-tokenxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    path = tmp_path / "state.json"
+    state = AnnouncementState(str(path))
+    state.load()
+    state.mark(channel_key("transaction:1", f"webhook:{webhook_id(url)}"))
+
+    assert "super-secret-token" not in path.read_text(encoding="utf-8")
+    assert not state.unseen(channel_key("transaction:1", "webhook:12345678901234567"))
+    assert state.unseen(channel_key("transaction:1", "webhook:999"))

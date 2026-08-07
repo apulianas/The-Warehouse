@@ -25,7 +25,7 @@ A Dockerized Python 3.12 Discord bot that posts Baltimore Orioles lineups and ro
 1. Create a Discord application and bot at <https://discord.com/developers/applications>.
 2. Copy `.env.example` to `.env`.
 3. Set `DISCORD_TOKEN`.
-4. Optionally set `DISCORD_CHANNEL_ID` to enable background update posts.
+4. Optionally set `DISCORD_CHANNEL_ID` (and/or `DISCORD_WEBHOOK_URL`) to enable background update posts.
 5. Start the bot:
 
 ```bash
@@ -51,12 +51,50 @@ next update rather than replaying everything the first channel already announced
 channel the bot cannot reach is retried instead of being silently marked as sent. The bot
 needs View Channel, Send Messages, and Embed Links in every channel you list.
 
+### Posting to a server you cannot add the bot to
+
+Adding a bot to a server requires the **Manage Server** permission, so a server
+you are only a member of will not appear in the install dropdown. A webhook is
+the way around this: an admin of that server creates one for you, and the bot
+posts through it without ever joining.
+
+Ask an admin for a webhook URL:
+
+> Server Settings → Integrations → Webhooks → New Webhook → choose the channel →
+> Copy Webhook URL
+
+Then add it and restart:
+
+```env
+DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/123456789012345678/your-webhook-token
+```
+
+```bash
+docker compose up -d
+```
+
+Webhooks can be combined with `DISCORD_CHANNEL_ID`, and several can be listed
+with commas. Each is deduplicated separately, exactly like channels.
+
+Two things to know about the webhook path:
+
+- Posts appear under the webhook's own name and avatar, not the bot's.
+- Slash commands such as `/lineup` will **not** work in that server, because
+  those require the bot to actually be installed. Only the automatic lineup and
+  transaction posts are delivered.
+
+A webhook URL ends in a secret token that lets anyone post to that channel, so
+keep it in `.env` and out of source control. Only the webhook's numeric ID is
+ever written to the state file or the logs. `DISCORD_TOKEN` is still required
+even in a webhook-only setup, because the bot needs a Discord session to run.
+
 ## Environment variables
 
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
 | `DISCORD_TOKEN` | Yes | | Discord bot token. Never commit it. |
 | `DISCORD_CHANNEL_ID` | No | | Channel ID for background polling announcements. Separate multiple IDs with commas to post the same updates to several channels. |
+| `DISCORD_WEBHOOK_URL` | No | | Webhook URL for posting into a server where the bot is not installed. Separate multiple URLs with commas. Contains a secret token; keep it out of source control. |
 | `POLL_INTERVAL_SECONDS` | No | `300` | Poll interval for today's updates. Minimum 30 seconds. |
 | `MATCHUP_MIN_PA` | No | `5` | Minimum historical plate appearances versus the opposing starter before a hot/cold emoji is shown. |
 | `TIME_ZONE` | No | `America/New_York` | Time zone used for "today" and display times. |

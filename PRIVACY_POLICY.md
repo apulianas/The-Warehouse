@@ -40,7 +40,9 @@ The Bot maintains one state file (`state.json`) on the Operator's own
 infrastructure. It contains only a list of announcement keys, each made up of:
 
 - A date, an MLB game or transaction identifier, and MLB player identifiers.
-- The Discord **channel** ID that the update was posted to.
+- The Discord **channel** ID, or the numeric **webhook** ID, that the update was
+  posted to. The secret token part of a webhook URL is never written to the
+  state file or to the logs.
 
 This exists solely so a restart does not repost the same lineup or transaction.
 It contains no Discord user IDs, no usernames, and no message content. A
@@ -50,9 +52,14 @@ representative entry looks like:
 transaction:2026-08-06:860371@123456789012345678
 ```
 
-Discord channel IDs and the bot token are supplied by the Operator as
-configuration. The bot token is a credential belonging to the Operator, not
+Discord channel IDs, webhook URLs, and the bot token are supplied by the
+Operator as configuration. These are credentials belonging to the Operator, not
 personal data about you.
+
+The Operator may also configure the Bot to post through a Discord **webhook**,
+which delivers the same public lineup and transaction updates to a channel
+without the Bot joining that server. A webhook is send-only: it does not let the
+Bot read messages, view members, or see anything else in that server.
 
 ## Information processed but not retained
 
