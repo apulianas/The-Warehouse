@@ -8,8 +8,11 @@ A Dockerized Python 3.12 Discord bot that posts Baltimore Orioles lineups and ro
   - `/lineup [date]` — scheduled Orioles games, probable/starting pitcher, and batting order when MLB has posted it.
   - `/transactions [date]` — Orioles roster transactions for a date.
   - `/help` — command help.
-- Discord embeds with game status, venue, score when available, batting order, positions, pitcher, transaction details, and MLB headshot links.
+- Discord embeds with game status, venue, score when available, batting order, positions, pitcher, transaction details, and clickable Baseball Savant batter-versus-pitcher links.
+- Transaction player names link to their Baseball Savant player pages.
+- Opposing batting orders are included in the same embed as a clickable Discord spoiler.
 - Background polling for today's lineup and transaction updates.
+- Automatic lineup posts wait until both teams' batting orders are available.
 - Duplicate announcement prevention across restarts using `/data/state.json`.
 - Graceful empty states when there is no game, lineup, or transaction data.
 
@@ -72,6 +75,8 @@ Batting order
 3. RF Anthony Santander
 ...
 ```
+
+The opposing team's lineup appears below this as a spoiler that can be clicked to reveal.
 
 If MLB has not posted a lineup yet:
 

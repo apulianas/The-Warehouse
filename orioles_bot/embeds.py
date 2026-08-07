@@ -43,17 +43,18 @@ def lineup_embeds(
             color=ORIOLES_ORANGE,
         )
         embed.add_field(name="Pitcher", value=_limit_field(format_pitcher(game)), inline=False)
-        for index, lineup_field in enumerate(_lineup_fields(format_lineup(game.lineup))):
+        for index, lineup_field in enumerate(
+            _lineup_fields(format_lineup(game.lineup, game.opponent_pitcher))
+        ):
             name = "Batting order" if index == 0 else "Batting order continued"
             embed.add_field(name=name, value=lineup_field, inline=False)
 
-        thumbnail = None
-        if game.lineup:
-            thumbnail = game.lineup[0].headshot_url
-        elif game.pitcher and game.pitcher.headshot_url:
-            thumbnail = game.pitcher.headshot_url
-        if thumbnail:
-            embed.set_thumbnail(url=thumbnail)
+        opponent_lineup = format_lineup(game.opponent_lineup, game.pitcher)
+        embed.add_field(
+            name=f"{game.opponent} batting order (click to reveal)",
+            value=_spoiler(opponent_lineup),
+            inline=False,
+        )
 
         embed.set_footer(text=f"{ORIOLES_TEAM_NAME} • Game PK {game.game_pk}")
         embeds.append(embed)
@@ -152,3 +153,7 @@ def _limit_field(text: str, max_chars: int = 1024) -> str:
     if len(text) <= max_chars:
         return text
     return f"{text[: max_chars - 1]}…"
+
+
+def _spoiler(text: str) -> str:
+    return f"||{_limit_field(text)}||"
