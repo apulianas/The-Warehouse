@@ -13,6 +13,7 @@ from discord.ext import commands, tasks
 from .config import BotConfig, load_config
 from .dates import parse_user_date, today_in_zone
 from .embeds import error_embed, help_embed, lineup_embeds, transaction_embeds
+from .matchups import MatchupService
 from .mlb import MlbApiError, MlbClient
 from .models import GameInfo, TransactionInfo
 from .state import AnnouncementState
@@ -28,6 +29,7 @@ class OriolesBot(commands.Bot):
         self.config = config
         self.session: aiohttp.ClientSession | None = None
         self.mlb: MlbClient | None = None
+        self.matchups = MatchupService(config.matchup_min_pa)
         self.announcement_state = AnnouncementState(config.state_file)
 
     async def setup_hook(self) -> None:
@@ -81,9 +83,15 @@ class OriolesBot(commands.Bot):
                 continue
             key = lineup_announcement_key(target_date, game)
             if key and self.announcement_state.unseen(key):
+                matchup_annotations = await self.matchups.fetch_for_games([game])
                 await channel.send(
                     content="Orioles lineup update",
-                    embeds=lineup_embeds([game], target_date, self.config.time_zone),
+                    embeds=lineup_embeds(
+                        [game],
+                        target_date,
+                        self.config.time_zone,
+                        matchup_annotations,
+                    ),
                 )
                 self.announcement_state.mark(key)
 
@@ -114,8 +122,11 @@ def _lineup_command(bot: OriolesBot) -> app_commands.Command[Any, ..., None]:
         except MlbApiError as exc:
             await interaction.followup.send(embed=error_embed(str(exc)), ephemeral=True)
             return
+        matchup_annotations = await bot.matchups.fetch_for_games(games)
         await interaction.followup.send(
-            embeds=lineup_embeds(games, target_date, bot.config.time_zone)
+            embeds=lineup_embeds(
+                games, target_date, bot.config.time_zone, matchup_annotations
+            )
         )
 
     return lineup

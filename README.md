@@ -8,7 +8,7 @@ A Dockerized Python 3.12 Discord bot that posts Baltimore Orioles lineups and ro
   - `/lineup [date]` — scheduled Orioles games, probable/starting pitcher, and batting order when MLB has posted it.
   - `/transactions [date]` — Orioles roster transactions for a date.
   - `/help` — command help.
-- Discord embeds with game status, venue, score when available, batting order, positions, pitcher, transaction details, and clickable Baseball Savant batter-versus-pitcher links.
+- Discord embeds with game status, venue, score when available, batting order, positions, pitcher, transaction details, clickable Baseball Savant batter-versus-pitcher links, and hot/cold matchup emojis when enough history exists.
 - Transaction player names link to their Baseball Savant player pages.
 - Opposing batting orders are included in the same embed as a clickable Discord spoiler.
 - Background polling for today's lineup and transaction updates.
@@ -37,6 +37,7 @@ The compose file mounts a named volume at `/data` so announced lineup and transa
 | `DISCORD_TOKEN` | Yes | | Discord bot token. Never commit it. |
 | `DISCORD_CHANNEL_ID` | No | | Channel ID for background polling announcements. |
 | `POLL_INTERVAL_SECONDS` | No | `300` | Poll interval for today's updates. Minimum 30 seconds. |
+| `MATCHUP_MIN_PA` | No | `5` | Minimum historical plate appearances versus the opposing starter before a hot/cold emoji is shown. |
 | `TIME_ZONE` | No | `America/New_York` | Time zone used for "today" and display times. |
 
 ## Discord permissions and intents
@@ -70,7 +71,7 @@ Pitcher
 Probable pitcher: Zach Eflin
 
 Batting order
-1. SS Gunnar Henderson
+1. SS Gunnar Henderson 🔥 (.450 wOBA, 8 PA)
 2. C Adley Rutschman
 3. RF Anthony Santander
 ...
@@ -119,4 +120,4 @@ Tests do not call the network.
 
 ## Data source
 
-This project uses the public MLB Stats API at `https://statsapi.mlb.com/api/v1` and does not require MLB API keys.
+This project uses the public MLB Stats API at `https://statsapi.mlb.com/api/v1` and pybaseball/Baseball Savant matchup data. It does not require MLB API keys.
