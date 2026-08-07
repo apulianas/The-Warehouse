@@ -8,6 +8,12 @@ from typing import Any
 
 LOGGER = logging.getLogger(__name__)
 
+CHANNEL_KEY_SEPARATOR = "@"
+
+
+def channel_key(key: str, channel_id: int) -> str:
+    return f"{key}{CHANNEL_KEY_SEPARATOR}{channel_id}"
+
 
 class AnnouncementState:
     def __init__(self, path: str) -> None:
@@ -28,6 +34,22 @@ class AnnouncementState:
 
     def unseen(self, key: str) -> bool:
         return key not in self._announced
+
+    def adopt_legacy_keys(self, channel_id: int) -> None:
+        """Treat pre-multi-channel keys as already sent to the primary channel.
+
+        Keys used to be channel agnostic. Without this, adding a second channel
+        would make the original channel repost everything it had already sent.
+        """
+        migrated = {
+            channel_key(key, channel_id)
+            for key in self._announced
+            if CHANNEL_KEY_SEPARATOR not in key
+        }
+        if not migrated - self._announced:
+            return
+        self._announced |= migrated
+        self.save()
 
     def mark(self, key: str) -> None:
         self._announced.add(key)

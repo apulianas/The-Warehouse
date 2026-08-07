@@ -214,3 +214,33 @@ def test_lineup_embeds_keep_preview_link_when_description_overflows() -> None:
 
     assert len(body) <= 4096
     assert body.endswith(f"[Statcast game preview]({savant_preview_url(823937)})")
+
+
+def test_announcement_state_keys_are_per_channel(tmp_path) -> None:
+    from orioles_bot.state import AnnouncementState, channel_key
+
+    state = AnnouncementState(str(tmp_path / "state.json"))
+    state.load()
+    state.mark(channel_key("lineup:1", 111))
+
+    assert not state.unseen(channel_key("lineup:1", 111))
+    assert state.unseen(channel_key("lineup:1", 222))
+
+
+def test_announcement_state_adopts_legacy_keys(tmp_path) -> None:
+    from orioles_bot.state import AnnouncementState, channel_key
+
+    path = tmp_path / "state.json"
+    path.write_text('{"announced": ["lineup:1", "transaction:2"]}', encoding="utf-8")
+
+    state = AnnouncementState(str(path))
+    state.load()
+    state.adopt_legacy_keys(111)
+
+    assert not state.unseen(channel_key("lineup:1", 111))
+    assert not state.unseen(channel_key("transaction:2", 111))
+    assert state.unseen(channel_key("lineup:1", 222))
+
+    reloaded = AnnouncementState(str(path))
+    reloaded.load()
+    assert not reloaded.unseen(channel_key("lineup:1", 111))
