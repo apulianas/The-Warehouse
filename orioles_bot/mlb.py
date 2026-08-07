@@ -23,6 +23,7 @@ HEADSHOT_URL_TEMPLATE = (
 )
 BASEBALL_SAVANT_SEARCH_URL = "https://baseballsavant.mlb.com/statcast_search"
 BASEBALL_SAVANT_PLAYER_URL = "https://baseballsavant.mlb.com/savant-player"
+TEAM_LOGO_URL_TEMPLATE = "https://midfield.mlbstatic.com/v1/team/{team_id}/spots/240"
 
 
 class MlbApiError(RuntimeError):
@@ -46,29 +47,28 @@ def headshot_url(player_id: int | str) -> str:
     return HEADSHOT_URL_TEMPLATE.format(player_id=player_id)
 
 
-def savant_matchup_url(batter_id: int | str, pitcher_id: int | str) -> str:
-    params = urlencode(
+def savant_matchup_params(batter_id: int | str, pitcher_id: int | str) -> str:
+    return urlencode(
         {
             "all": "true",
-            "hfBatters": f"{batter_id}|",
-            "hfPitchers": f"{pitcher_id}|",
+            "batters_lookup[]": str(batter_id),
+            "pitchers_lookup[]": str(pitcher_id),
             "hfGT": "R|",
-            "hfSea": f"{date.today().year}|",
-            "group_by": "name",
-            "min_pas": "0",
-            "min_pitches": "0",
-            "min_results": "0",
-            "player_type": "batter",
-            "sort_col": "pitches",
-            "sort_order": "desc",
-            "type": "batter",
+            "type": "details",
         }
     )
-    return f"{BASEBALL_SAVANT_SEARCH_URL}?{params}"
+
+
+def savant_matchup_url(batter_id: int | str, pitcher_id: int | str) -> str:
+    return f"{BASEBALL_SAVANT_SEARCH_URL}?{savant_matchup_params(batter_id, pitcher_id)}"
 
 
 def savant_player_url(player_id: int | str) -> str:
     return f"{BASEBALL_SAVANT_PLAYER_URL}/{player_id}"
+
+
+def team_logo_url(team_id: int | str) -> str:
+    return TEAM_LOGO_URL_TEMPLATE.format(team_id=team_id)
 
 
 class MlbClient:
@@ -169,6 +169,7 @@ def parse_game(raw_game: dict[str, Any], boxscore: dict[str, Any] | None = None)
         status=status,
         venue=venue,
         home_team=teams.get("home", {}).get("team", {}).get("name") or "Home",
+        home_team_id=_safe_int(teams.get("home", {}).get("team", {}).get("id")),
         away_team=teams.get("away", {}).get("team", {}).get("name") or "Away",
         opponent=opponent.get("name") or "Opponent TBD",
         is_home=side == "home",

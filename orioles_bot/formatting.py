@@ -35,8 +35,11 @@ def format_game_time(game: GameInfo, time_zone: ZoneInfo) -> str:
 def format_pitcher(game: GameInfo) -> str:
     if game.pitcher is None:
         return "Pitcher not announced."
-    if game.pitcher.headshot_url:
-        return f"{game.pitcher.status}: [{game.pitcher.name}]({game.pitcher.headshot_url})"
+    if game.pitcher.player_id is not None:
+        return (
+            f"{game.pitcher.status}: "
+            f"[{game.pitcher.name}]({savant_player_url(game.pitcher.player_id)})"
+        )
     return f"{game.pitcher.status}: {game.pitcher.name}"
 
 
@@ -53,7 +56,7 @@ def format_lineup(
         link = (
             savant_matchup_url(player.player_id, opposing_pitcher.player_id)
             if opposing_pitcher and opposing_pitcher.player_id
-            else player.headshot_url
+            else savant_player_url(player.player_id)
         )
         annotation = _matchup_annotation(player, opposing_pitcher, matchup_annotations)
         name = f"{player.name} {annotation.emoji}" if annotation else player.name

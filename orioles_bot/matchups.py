@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 import logging
+import urllib.request
 from collections.abc import Callable, Iterable, Mapping
-from datetime import date, timedelta
 from typing import Any
-from urllib.parse import urlencode
 
+from .mlb import savant_matchup_params
 from .models import GameInfo, MatchupAnnotation
 
 
@@ -18,7 +20,7 @@ HOT_WOBA = 0.400
 COLD_WOBA = 0.280
 HOT_AVERAGE = 0.300
 COLD_AVERAGE = 0.200
-MATCHUP_FETCH_TIMEOUT_SECONDS = 20
+MATCHUP_FETCH_TIMEOUT_SECONDS = 45
 
 HIT_EVENTS = {"single", "double", "triple", "home_run"}
 NON_AT_BAT_EVENTS = {
@@ -174,30 +176,17 @@ def _records_from_data(data: Any) -> list[Mapping[str, Any]]:
 
 
 def _fetch_statcast_batter_pitcher(batter_id: int, pitcher_id: int) -> Any:
-    import pybaseball
-
-    statcast_batter_pitcher = getattr(pybaseball, "statcast_batter_pitcher", None)
-    if statcast_batter_pitcher is not None:
-        start_date = date(2015, 3, 1).isoformat()
-        end_date = (date.today() + timedelta(days=1)).isoformat()
-        return statcast_batter_pitcher(start_date, end_date, batter_id, pitcher_id)
-
-    from pybaseball.datasources.statcast import get_statcast_data_from_csv_url
-
-    return get_statcast_data_from_csv_url(_statcast_matchup_csv_path(batter_id, pitcher_id))
-
-
-def _statcast_matchup_csv_path(batter_id: int, pitcher_id: int) -> str:
-    params = urlencode(
-        {
-            "all": "true",
-            "hfBatters": f"{batter_id}|",
-            "hfPitchers": f"{pitcher_id}|",
-            "player_type": "batter",
-            "type": "details",
-        }
+    request = urllib.request.Request(
+        statcast_matchup_csv_url(batter_id, pitcher_id),
+        headers={"User-Agent": "orioles-discord-bot"},
     )
-    return f"{STATCAST_MATCHUP_CSV_URL}?{params}"
+    with urllib.request.urlopen(request, timeout=MATCHUP_FETCH_TIMEOUT_SECONDS) as response:
+        payload = response.read().decode("utf-8-sig", errors="replace")
+    return list(csv.DictReader(io.StringIO(payload)))
+
+
+def statcast_matchup_csv_url(batter_id: int | str, pitcher_id: int | str) -> str:
+    return f"{STATCAST_MATCHUP_CSV_URL}?{savant_matchup_params(batter_id, pitcher_id)}"
 
 
 def _clean_event(value: Any) -> str | None:

@@ -15,6 +15,7 @@ from .formatting import (
     format_pitcher,
     format_transaction,
 )
+from .mlb import team_logo_url
 from .models import GameInfo, MatchupAnnotation, ORIOLES_TEAM_NAME, TransactionInfo
 
 
@@ -38,34 +39,30 @@ def lineup_embeds(
 
     embeds: list[discord.Embed] = []
     for game in games:
-        embed = discord.Embed(
-            title=format_game_title(game),
-            description=(
-                f"{format_game_time(game, time_zone)} • {game.venue}\n"
-                f"Status: {game.status}"
-            ),
-            color=ORIOLES_ORANGE,
+        header = (
+            f"{format_game_time(game, time_zone)} • {game.venue}\n"
+            f"Status: {game.status}\n"
+            f"{format_pitcher(game)}"
         )
-        embed.add_field(name="Pitcher", value=_limit_field(format_pitcher(game)), inline=False)
-        for index, lineup_field in enumerate(
-            _lineup_fields(
-                format_lineup(game.lineup, game.opponent_pitcher, matchup_annotations)
-            )
-        ):
-            name = "Batting order" if index == 0 else "Batting order continued"
-            embed.add_field(name=name, value=lineup_field, inline=False)
-
+        orioles_lineup = format_lineup(
+            game.lineup, game.opponent_pitcher, matchup_annotations
+        )
         opponent_lineup = format_lineup(
             game.opponent_lineup, game.pitcher, matchup_annotations
         )
-        for index, lineup_field in enumerate(_lineup_fields(opponent_lineup)):
-            name = (
-                f"{game.opponent} batting order"
-                if index == 0
-                else f"{game.opponent} batting order continued"
-            )
-            embed.add_field(name=name, value=lineup_field, inline=False)
+        description = (
+            f"{header}\n\n"
+            f"**{ORIOLES_TEAM_NAME} batting order**\n{orioles_lineup}\n\n"
+            f"**{game.opponent} batting order**\n{opponent_lineup}"
+        )
 
+        embed = discord.Embed(
+            title=format_game_title(game),
+            description=_limit_description(description),
+            color=ORIOLES_ORANGE,
+        )
+        if game.home_team_id is not None:
+            embed.set_thumbnail(url=team_logo_url(game.home_team_id))
         embed.set_footer(text=f"{ORIOLES_TEAM_NAME} • Game PK {game.game_pk}")
         embeds.append(embed)
     return embeds
@@ -139,31 +136,13 @@ def error_embed(message: str) -> discord.Embed:
     )
 
 
-def _lineup_fields(text: str) -> list[str]:
-    return _chunk_lines(text, max_chars=1000)
-
-
-def _chunk_lines(text: str, max_chars: int) -> list[str]:
-    chunks: list[str] = []
-    current = ""
-    for line in text.splitlines() or [text]:
-        candidate = line if not current else f"{current}\n{line}"
-        if len(candidate) <= max_chars:
-            current = candidate
-            continue
-        if current:
-            chunks.append(current)
-        current = line[:max_chars]
-    if current:
-        chunks.append(current)
-    return chunks or ["—"]
+def _limit_description(text: str, max_chars: int = 4096) -> str:
+    if len(text) <= max_chars:
+        return text
+    return f"{text[: max_chars - 1]}…"
 
 
 def _limit_field(text: str, max_chars: int = 1024) -> str:
     if len(text) <= max_chars:
         return text
     return f"{text[: max_chars - 1]}…"
-
-
-def _spoiler(text: str) -> str:
-    return f"||{_limit_field(text)}||"
