@@ -6,6 +6,8 @@ from datetime import date, datetime
 
 ORIOLES_TEAM_ID = 110
 ORIOLES_TEAM_NAME = "Baltimore Orioles"
+AMERICAN_LEAGUE_ID = 103
+AL_EAST_DIVISION_ID = 201
 
 
 @dataclass(frozen=True)
@@ -123,3 +125,53 @@ class PitchingSplit:
     strikeouts: int = 0
     era: float | None = None
     whip: float | None = None
+
+
+@dataclass(frozen=True)
+class ScheduleWindow:
+    """An inclusive day range covering the next N days, today included."""
+
+    days: int
+    start: date
+    end: date
+
+
+@dataclass(frozen=True)
+class NextGame:
+    """A team's upcoming game, used to annotate a standings row."""
+
+    team_id: int
+    opponent: str
+    opponent_abbreviation: str | None
+    opponent_team_id: int | None
+    is_home: bool
+    game_date: datetime | None
+    status: str
+
+
+@dataclass(frozen=True)
+class TeamRecord:
+    team_id: int
+    team_name: str
+    wins: int
+    losses: int
+    winning_percentage: str | None = None
+    division_rank: str | None = None
+    games_back: str | None = None
+    wild_card_games_back: str | None = None
+    streak: str | None = None
+    run_differential: int | None = None
+    division_leader: bool = False
+    clinch_indicator: str | None = None
+
+    @property
+    def is_orioles(self) -> bool:
+        return self.team_id == ORIOLES_TEAM_ID
+
+
+@dataclass(frozen=True)
+class DivisionStandings:
+    division_id: int | None
+    division_name: str
+    teams: tuple[TeamRecord, ...]
+    season: str | None = None
