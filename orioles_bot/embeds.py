@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import date
 from zoneinfo import ZoneInfo
 
@@ -16,7 +16,12 @@ from .formatting import (
     format_pitchers,
     format_transaction,
 )
-from .mlb import savant_preview_url, team_logo_url
+from .mlb import (
+    HEADSHOT_FEATURE_WIDTH,
+    headshot_url,
+    savant_preview_url,
+    team_logo_url,
+)
 from .models import (
     GameInfo,
     MatchupAnnotation,
@@ -114,15 +119,32 @@ def transaction_embeds(
             inline=False,
         )
 
+    _set_transaction_art(embed, transactions)
+
+    if len(transactions) > 25:
+        embed.set_footer(text=f"Showing 25 of {len(transactions)} transactions.")
+    return [embed]
+
+
+def _set_transaction_art(
+    embed: discord.Embed, transactions: Sequence[TransactionInfo]
+) -> None:
+    """Show a large headshot when the post is about one specific player.
+
+    Automatic announcements post one transaction at a time, so a call-up gets a
+    full-width photo. A multi-player trade or a digest of several transactions
+    falls back to a thumbnail, where a single face would misrepresent the post.
+    """
+    solo = transactions[0] if len(transactions) == 1 else None
+    if solo is not None and solo.player_id is not None and len(solo.players) <= 1:
+        embed.set_image(url=headshot_url(solo.player_id, HEADSHOT_FEATURE_WIDTH))
+        return
+
     first_headshot = next(
         (item.headshot_url for item in transactions if item.headshot_url), None
     )
     if first_headshot:
         embed.set_thumbnail(url=first_headshot)
-
-    if len(transactions) > 25:
-        embed.set_footer(text=f"Showing 25 of {len(transactions)} transactions.")
-    return [embed]
 
 
 def help_embed() -> discord.Embed:
