@@ -135,6 +135,10 @@ class PitchingGame:
     result: str | None
     stat: PitchingSplit
     decision: str = "No decision"
+    game_pk: int | None = None
+    team_id: int | None = None
+    team_score: int | None = None
+    opponent_score: int | None = None
 
 
 @dataclass(frozen=True)
