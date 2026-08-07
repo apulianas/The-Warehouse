@@ -21,7 +21,6 @@ HEADSHOT_URL_TEMPLATE = (
     "https://img.mlbstatic.com/mlb-photos/image/upload/"
     "w_180,q_auto:good/v1/people/{player_id}/headshot/67/current"
 )
-BASEBALL_SAVANT_SEARCH_URL = "https://baseballsavant.mlb.com/statcast_search"
 BASEBALL_SAVANT_PLAYER_URL = "https://baseballsavant.mlb.com/savant-player"
 TEAM_LOGO_URL_TEMPLATE = "https://midfield.mlbstatic.com/v1/team/{team_id}/spots/240"
 
@@ -48,6 +47,12 @@ def headshot_url(player_id: int | str) -> str:
 
 
 def savant_matchup_params(batter_id: int | str, pitcher_id: int | str) -> str:
+    """Filters for the Statcast CSV endpoint.
+
+    These params only work on ``/statcast_search/csv``. The HTML search page
+    ignores them for form pre-selection, so matchup results are fetched and
+    rendered inline instead of linked.
+    """
     return urlencode(
         {
             "all": "true",
@@ -57,10 +62,6 @@ def savant_matchup_params(batter_id: int | str, pitcher_id: int | str) -> str:
             "type": "details",
         }
     )
-
-
-def savant_matchup_url(batter_id: int | str, pitcher_id: int | str) -> str:
-    return f"{BASEBALL_SAVANT_SEARCH_URL}?{savant_matchup_params(batter_id, pitcher_id)}"
 
 
 def savant_player_url(player_id: int | str) -> str:

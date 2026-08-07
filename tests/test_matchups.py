@@ -15,7 +15,6 @@ from orioles_bot.matchups import (
 )
 from orioles_bot.mlb import (
     headshot_url,
-    savant_matchup_url,
     savant_player_url,
     team_logo_url,
 )
@@ -76,14 +75,14 @@ def test_matchup_service_caches_pairs_for_process_lifetime() -> None:
     assert calls == 1
 
 
-def test_format_lineup_preserves_savant_matchup_url_and_adds_annotation() -> None:
+def test_format_lineup_links_savant_player_page_and_adds_annotation() -> None:
     player = LineupPlayer(101, "Leadoff Hitter", "CF", 1, headshot_url(101))
     pitcher = PitcherInfo(201, "Opponent Starter")
     annotation = MatchupAnnotation("🔥", "wOBA", 0.44, 5)
 
     assert format_lineup((player,), pitcher, {(101, 201): annotation}) == (
         "1. CF [Leadoff Hitter 🔥]"
-        f"({savant_matchup_url(101, 201)}) (.440 wOBA, 5 PA)"
+        f"({savant_player_url(101)}) (.440 wOBA, 5 PA)"
     )
 
 
@@ -131,8 +130,10 @@ def test_lineup_embeds_include_annotations_for_both_teams() -> None:
     body = embed.description or ""
     assert "Orioles Hitter 🔥" in body
     assert "Opponent Hitter 🧊" in body
-    assert savant_matchup_url(101, 401) in body
-    assert savant_matchup_url(301, 201) in body
+    assert savant_player_url(101) in body
+    assert savant_player_url(301) in body
+    assert f"New York Yankees starter: [Opponent Starter]({savant_player_url(401)})" in body
+    assert f"Baltimore Orioles starter: [Orioles Starter]({savant_player_url(201)})" in body
     assert embed.thumbnail.url == team_logo_url(110)
 
 
