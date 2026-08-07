@@ -120,4 +120,4 @@ Tests do not call the network.
 
 ## Data source
 
-This project uses the public MLB Stats API at `https://statsapi.mlb.com/api/v1` and pybaseball/Baseball Savant matchup data. It does not require MLB API keys.
+This project uses the public MLB Stats API at `https://statsapi.mlb.com/api/v1` and Baseball Savant Statcast matchup data. It does not require MLB API keys.

@@ -92,9 +92,8 @@ def test_parse_game_extracts_orioles_lineup_from_live_feed() -> None:
 def test_savant_matchup_url_filters_batter_and_pitcher() -> None:
     assert savant_matchup_url(101, 201) == (
         "https://baseballsavant.mlb.com/statcast_search?"
-        f"all=true&hfBatters=101%7C&hfPitchers=201%7C&hfGT=R%7C&hfSea={date.today().year}%7C&"
-        "group_by=name&min_pas=0&min_pitches=0&min_results=0&player_type=batter&"
-        "sort_col=pitches&sort_order=desc&type=batter"
+        "all=true&batters_lookup%5B%5D=101&pitchers_lookup%5B%5D=201&hfGT=R%7C&"
+        "player_type=batter&type=details"
     )
 
 

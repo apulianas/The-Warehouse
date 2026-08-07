@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 from datetime import date
 from zoneinfo import ZoneInfo
 
 from orioles_bot.embeds import lineup_embeds
 from orioles_bot.formatting import format_lineup
-from orioles_bot.matchups import MatchupService, calculate_matchup_annotation
+from orioles_bot.matchups import (
+    MatchupService,
+    calculate_matchup_annotation,
+    statcast_matchup_csv_url,
+)
 from orioles_bot.mlb import headshot_url, savant_matchup_url
 from orioles_bot.models import GameInfo, LineupPlayer, MatchupAnnotation, PitcherInfo
 
@@ -121,3 +127,23 @@ def test_lineup_embeds_include_annotations_for_both_teams() -> None:
     assert "Opponent Hitter 🧊" in field_values
     assert savant_matchup_url(101, 401) in field_values
     assert savant_matchup_url(301, 201) in field_values
+
+
+def test_statcast_matchup_csv_url_matches_search_filters() -> None:
+    assert statcast_matchup_csv_url(101, 201) == (
+        "https://baseballsavant.mlb.com/statcast_search/csv?"
+        "all=true&batters_lookup%5B%5D=101&pitchers_lookup%5B%5D=201&hfGT=R%7C&"
+        "player_type=batter&type=details"
+    )
+
+
+def test_calculate_matchup_annotation_parses_savant_csv_rows() -> None:
+    header = "events,woba_value,woba_denom\n"
+    body = "".join(f"single,{value},1\n" for value in [0.9, 0.9, 0.9, 0.9, 0.9])
+    rows = list(csv.DictReader(io.StringIO(header + body)))
+
+    annotation = calculate_matchup_annotation(rows, 5)
+
+    assert annotation is not None
+    assert annotation.emoji == "🔥"
+    assert annotation.plate_appearances == 5
