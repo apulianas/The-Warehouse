@@ -118,6 +118,7 @@ def parse_game(raw_game: dict[str, Any], boxscore: dict[str, Any] | None = None)
     venue = raw_game.get("venue", {}).get("name") or "TBD"
 
     lineup = _extract_lineup(boxscore, side)
+    opponent_lineup = _extract_lineup(boxscore, other_side)
     pitcher = _extract_confirmed_pitcher(boxscore, side) or _extract_probable_pitcher(
         teams.get(side, {})
     )
@@ -145,6 +146,7 @@ def parse_game(raw_game: dict[str, Any], boxscore: dict[str, Any] | None = None)
         opponent_score=opponent_score,
         pitcher=pitcher,
         lineup=lineup,
+        opponent_lineup=opponent_lineup,
     )
 
 
