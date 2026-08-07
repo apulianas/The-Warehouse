@@ -93,7 +93,7 @@ def test_savant_matchup_url_filters_batter_and_pitcher() -> None:
     assert savant_matchup_url(101, 201) == (
         "https://baseballsavant.mlb.com/statcast_search?"
         "all=true&batters_lookup%5B%5D=101&pitchers_lookup%5B%5D=201&hfGT=R%7C&"
-        "player_type=batter&type=details"
+        "type=details"
     )
 
 
@@ -103,7 +103,7 @@ def test_savant_player_url_uses_player_id() -> None:
     )
 
 
-def test_format_lineup_links_player_headshots() -> None:
+def test_format_lineup_links_savant_player_page_without_pitcher() -> None:
     player = LineupPlayer(
         player_id=101,
         name="Leadoff Hitter",
@@ -113,8 +113,7 @@ def test_format_lineup_links_player_headshots() -> None:
     )
 
     assert format_lineup((player,)) == (
-        "1. CF [Leadoff Hitter](https://img.mlbstatic.com/mlb-photos/image/upload/"
-        "w_180,q_auto:good/v1/people/101/headshot/67/current)"
+        "1. CF [Leadoff Hitter](https://baseballsavant.mlb.com/savant-player/101)"
     )
 
 

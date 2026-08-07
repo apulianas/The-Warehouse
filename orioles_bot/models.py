@@ -40,6 +40,7 @@ class GameInfo:
     status: str
     venue: str
     home_team: str
+    home_team_id: int | None
     away_team: str
     opponent: str
     is_home: bool
