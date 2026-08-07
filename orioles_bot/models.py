@@ -128,6 +128,15 @@ class PitchingSplit:
 
 
 @dataclass(frozen=True)
+class PitchingGame:
+    game_date: date
+    opponent: str
+    is_home: bool
+    result: str | None
+    stat: PitchingSplit
+
+
+@dataclass(frozen=True)
 class ScheduleWindow:
     """An inclusive day range covering the next N days, today included."""
 

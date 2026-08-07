@@ -28,7 +28,7 @@ from .embeds import (
     error_embed,
     help_embed,
     lineup_embeds,
-    player_stats_embed,
+    player_stats_embeds,
     schedule_embeds,
     standings_embed,
     transaction_embeds,
@@ -314,12 +314,19 @@ def _player_stats_command(bot: OriolesBot) -> app_commands.Command[Any, ..., Non
             hitting, pitching = await bot.player_stats.stats(
                 client, resolved.player_id, window
             )
+            pitching_games = (
+                await bot.player_stats.pitching_games(client, resolved.player_id, window)
+                if pitching
+                else ()
+            )
         except MlbApiError as exc:
             await interaction.followup.send(embed=error_embed(str(exc)), ephemeral=True)
             return
 
         await interaction.followup.send(
-            embed=player_stats_embed(resolved, window, hitting, pitching)
+            embeds=player_stats_embeds(
+                resolved, window, hitting, pitching, pitching_games
+            )
         )
 
     @playerstats.autocomplete("player")
