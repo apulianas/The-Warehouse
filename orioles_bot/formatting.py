@@ -21,6 +21,7 @@ from .models import (
     TeamRecord,
     TransactionInfo,
     TransactionPlayer,
+    WildCardStandings,
 )
 
 
@@ -400,6 +401,106 @@ def _ordinal(rank: str) -> str:
 
 def format_no_standings() -> str:
     return "Standings are unavailable right now. Try again shortly."
+
+
+# The American League awards three wild card berths, so the playoff line falls
+# after the third team in the race.
+WILD_CARD_SPOTS = 3
+PLAYOFF_LINE = "───────── playoff line ─────────"
+
+
+def format_wild_card_row(
+    record: TeamRecord,
+    next_games: Mapping[int, NextGame] | None = None,
+    time_zone: ZoneInfo | None = None,
+) -> str:
+    """One wild card line, showing games up on or back of the last berth."""
+    rank = record.wild_card_rank or "-"
+    name = record.team_name
+    if record.clinch_indicator:
+        name = f"{name} ({record.clinch_indicator})"
+    if record.is_orioles:
+        name = f"**{name}**"
+    line = (
+        f"{rank}. {name} — {record.wins}-{record.losses} "
+        f"({format_rate_text(record.winning_percentage)}), "
+        f"{format_wild_card_gap(record)}, "
+        f"{format_streak(record.streak)}"
+    )
+
+    next_game = (next_games or {}).get(record.team_id)
+    if next_game is None:
+        return line
+    return f"{line}\n{format_next_game(next_game, time_zone)}"
+
+
+def format_wild_card_gap(record: TeamRecord) -> str:
+    """Games ahead of or behind the last wild card berth.
+
+    MLB reports a team holding a berth with a leading ``+``, meaning games up on
+    the first team outside the picture, and everyone else as games back.
+    """
+    raw = (record.wild_card_games_back or "").strip()
+    if raw.startswith("+"):
+        return f"{raw} up"
+    gap = format_games_back(record.wild_card_games_back)
+    if gap == NO_STAT:
+        return "even with the line" if record.wild_card_leader else NO_STAT
+    return f"{gap} GB"
+
+
+def format_wild_card(
+    standings: WildCardStandings,
+    next_games: Mapping[int, NextGame] | None = None,
+    time_zone: ZoneInfo | None = None,
+) -> str:
+    """The wild card race with a divider drawn after the final berth."""
+    if not standings.teams:
+        return "Wild card standings are not available yet."
+
+    lines: list[str] = []
+    line_drawn = False
+    for index, record in enumerate(standings.teams):
+        if not line_drawn and _is_below_the_line(record, index):
+            lines.append(PLAYOFF_LINE)
+            line_drawn = True
+        lines.append(format_wild_card_row(record, next_games, time_zone))
+    return "\n".join(lines)
+
+
+def _is_below_the_line(record: TeamRecord, index: int) -> bool:
+    """Whether a team sits outside the wild card berths.
+
+    The API's own ``wildCardLeader`` flag is preferred, since it already
+    accounts for ties, and position is only used when the flag is absent.
+    """
+    rank = _safe_rank(record.wild_card_rank)
+    if rank is not None:
+        return rank > WILD_CARD_SPOTS
+    if record.wild_card_leader:
+        return False
+    return index >= WILD_CARD_SPOTS
+
+
+def _safe_rank(value: str | None) -> int | None:
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def format_orioles_wild_card(standings: WildCardStandings) -> str | None:
+    """A one-line summary of the Orioles' position in the race, for the footer."""
+    orioles = next(
+        (record for record in standings.teams if record.is_orioles), None
+    )
+    if orioles is None:
+        return None
+    parts = [f"{ORIOLES_TEAM_NAME}: {orioles.wins}-{orioles.losses}"]
+    if orioles.wild_card_rank:
+        parts.append(f"{_ordinal(orioles.wild_card_rank)} in the AL wild card")
+    parts.append(format_wild_card_gap(orioles))
+    return " • ".join(parts)
 
 
 def format_schedule_window(window: ScheduleWindow) -> str:

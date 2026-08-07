@@ -8,7 +8,7 @@ A Dockerized Python 3.12 Discord bot that posts Baltimore Orioles lineups, roste
   - `/lineup [date]` — scheduled Orioles games, probable/starting pitcher, and batting order when MLB has posted it.
   - `/transactions [date]` — Orioles roster transactions for a date.
   - `/playerstats <player> [days]` — a player's hitting and pitching totals over the last N days.
-  - `/standings` — AL East standings with each team's next opponent.
+  - `/standings [view]` — the AL wild card race and the AL East, each with next opponents.
   - `/schedule [days]` — upcoming Orioles games over the next N days.
   - `/help` — command help.
 - Discord embeds with game status, venue, score when available, both batting orders, positions, both starting pitchers, transaction details, and hot/cold matchup emojis with the underlying wOBA and plate appearances when enough history exists.
@@ -27,6 +27,10 @@ A Dockerized Python 3.12 Discord bot that posts Baltimore Orioles lineups, roste
   with the Orioles row bolded. Every row is annotated with that team's next opponent and
   start time, resolved for the whole division in a single schedule request. The footer
   summarises the Orioles' division rank, wild-card position, and run differential.
+- `/standings` also shows the full AL wild card race — all twelve teams that do not lead
+  a division, ranked, with a drawn playoff line after the third and final berth. Teams
+  holding a spot show how many games they are up on the line; everyone else shows games
+  back. The view defaults to both tables and accepts `Wild card` or `AL East` to show one.
 - `/schedule` lists upcoming games with opponent, start time, and both probable starters.
   The window defaults to the next 7 days and accepts 1 through 30. A game that has already
   finished shows its final score instead of probable starters.

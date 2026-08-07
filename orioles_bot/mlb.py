@@ -26,6 +26,7 @@ from .models import (
     TeamRecord,
     TransactionInfo,
     TransactionPlayer,
+    WildCardStandings,
 )
 
 
@@ -246,6 +247,23 @@ class MlbClient:
             },
         )
         return parse_standings(data, division_id)
+
+    async def fetch_wild_card_standings(self) -> WildCardStandings | None:
+        """The full AL wild card race in one call.
+
+        ``standingsTypes=wildCard`` returns every team that does not lead its
+        division, already ranked, which is exactly the race and saves ranking
+        three divisions by hand.
+        """
+        data = await self._get_json(
+            "/standings",
+            {
+                "leagueId": AMERICAN_LEAGUE_ID,
+                "standingsTypes": "wildCard",
+                "hydrate": "division,team",
+            },
+        )
+        return parse_wild_card_standings(data)
 
     async def fetch_schedule(self, window: ScheduleWindow) -> list[GameInfo]:
         """Scheduled games across a date range.
@@ -470,6 +488,44 @@ def parse_standings(
     return None
 
 
+def parse_wild_card_standings(data: dict[str, Any]) -> WildCardStandings | None:
+    """Flatten a wildCard standings payload into one ranked league-wide race.
+
+    The payload nests team records under one or more records entries, so they
+    are gathered and re-sorted by wild card rank rather than trusting the
+    grouping to already be in race order.
+    """
+    records = data.get("records")
+    if not isinstance(records, list):
+        return None
+
+    collected: list[TeamRecord] = []
+    season: str | None = None
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        collected.extend(parse_team_records(record.get("teamRecords")))
+        season = season or _first_team_season(record.get("teamRecords"))
+
+    if not collected:
+        return None
+
+    return WildCardStandings(
+        league_id=AMERICAN_LEAGUE_ID,
+        league_name="American League",
+        teams=tuple(sorted(collected, key=_wild_card_sort_key)),
+        season=season,
+    )
+
+
+def _wild_card_sort_key(record: TeamRecord) -> tuple[int, float, int]:
+    """Order by wild card rank, falling back to wins when the rank is absent."""
+    rank = _safe_int(record.wild_card_rank)
+    if rank is not None:
+        return (0, float(rank), -record.wins)
+    return (1, 0.0, -record.wins)
+
+
 def _first_team_season(raw_records: Any) -> str | None:
     """Season year, which the API reports per team record rather than per division."""
     if not isinstance(raw_records, list):
@@ -516,6 +572,8 @@ def parse_team_records(raw_records: Any) -> tuple[TeamRecord, ...]:
                 run_differential=_safe_int(raw.get("runDifferential")),
                 division_leader=bool(raw.get("divisionLeader")),
                 clinch_indicator=_optional_text(raw.get("clinchIndicator")),
+                wild_card_rank=_optional_text(raw.get("wildCardRank")),
+                wild_card_leader=bool(raw.get("wildCardLeader")),
             )
         )
 
