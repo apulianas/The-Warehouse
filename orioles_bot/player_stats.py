@@ -5,7 +5,7 @@ import time
 from collections.abc import Callable, Iterable
 
 from .mlb import MlbApiError, MlbClient
-from .models import HittingSplit, PitchingSplit, PlayerRef, StatsWindow
+from .models import HittingSplit, PitchingGame, PitchingSplit, PlayerRef, StatsWindow
 
 
 ROSTER_TTL_SECONDS = 900
@@ -33,6 +33,7 @@ class PlayerStatsService:
         self.max_entries = max_entries
         self._clock = clock
         self._stats: dict[tuple[int, str, str], StatsPair] = {}
+        self._pitching_games: dict[tuple[int, str, str], tuple[PitchingGame, ...]] = {}
         self._roster: tuple[PlayerRef, ...] = ()
         self._roster_fetched_at: float | None = None
         self._lock = asyncio.Lock()
@@ -110,6 +111,23 @@ class PlayerStatsService:
                 self._stats.clear()
             self._stats.setdefault(key, splits)
             return self._stats[key]
+
+    async def pitching_games(
+        self, client: MlbClient, player_id: int, window: StatsWindow
+    ) -> tuple[PitchingGame, ...]:
+        key = (player_id, window.start.isoformat(), window.end.isoformat())
+        async with self._lock:
+            cached = self._pitching_games.get(key)
+            if cached is not None:
+                return cached
+
+        games = await client.fetch_player_pitching_games(player_id, window)
+
+        async with self._lock:
+            if len(self._pitching_games) >= self.max_entries:
+                self._pitching_games.clear()
+            self._pitching_games.setdefault(key, games)
+            return self._pitching_games[key]
 
     async def _roster_or_empty(self, client: MlbClient) -> tuple[PlayerRef, ...]:
         try:
