@@ -148,3 +148,20 @@ Tests do not call the network.
 ## Data source
 
 This project uses the public MLB Stats API at `https://statsapi.mlb.com/api/v1` and Baseball Savant Statcast matchup data. It does not require MLB API keys.
+
+## Legal
+
+- [Terms of Service](TERMS_OF_SERVICE.md)
+- [Privacy Policy](PRIVACY_POLICY.md)
+
+These are the URLs to supply in the Discord developer portal under **General
+Information**:
+
+```
+https://github.com/apulianas/The-Warehouse/blob/main/TERMS_OF_SERVICE.md
+https://github.com/apulianas/The-Warehouse/blob/main/PRIVACY_POLICY.md
+```
+
+This project is not affiliated with, endorsed by, or sponsored by Major League
+Baseball, the Baltimore Orioles, or Discord Inc. MLB and club trademarks and
+copyrights are the property of their respective owners.
