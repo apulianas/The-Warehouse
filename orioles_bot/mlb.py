@@ -52,8 +52,15 @@ def savant_matchup_url(batter_id: int | str, pitcher_id: int | str) -> str:
             "all": "true",
             "hfBatters": f"{batter_id}|",
             "hfPitchers": f"{pitcher_id}|",
+            "hfGT": "R|",
+            "hfSea": f"{date.today().year}|",
             "group_by": "name",
+            "min_pas": "0",
+            "min_pitches": "0",
+            "min_results": "0",
             "player_type": "batter",
+            "sort_col": "pitches",
+            "sort_order": "desc",
             "type": "batter",
         }
     )
