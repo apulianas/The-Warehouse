@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable, Iterable, Mapping
+from datetime import date, timedelta
 from typing import Any
 from urllib.parse import urlencode
 
@@ -32,7 +33,7 @@ NON_AT_BAT_EVENTS = {
 }
 
 FetchRecords = Callable[[int, int], Any]
-STATCAST_MATCHUP_CSV_PATH = "/statcast_search/csv"
+STATCAST_MATCHUP_CSV_URL = "https://baseballsavant.mlb.com/statcast_search/csv"
 
 
 class MatchupService:
@@ -177,10 +178,9 @@ def _fetch_statcast_batter_pitcher(batter_id: int, pitcher_id: int) -> Any:
 
     statcast_batter_pitcher = getattr(pybaseball, "statcast_batter_pitcher", None)
     if statcast_batter_pitcher is not None:
-        try:
-            return statcast_batter_pitcher(batter_id, pitcher_id)
-        except TypeError:
-            LOGGER.debug("pybaseball.statcast_batter_pitcher signature did not accept IDs")
+        start_date = date(2015, 3, 1).isoformat()
+        end_date = (date.today() + timedelta(days=1)).isoformat()
+        return statcast_batter_pitcher(start_date, end_date, batter_id, pitcher_id)
 
     from pybaseball.datasources.statcast import get_statcast_data_from_csv_url
 
@@ -197,7 +197,7 @@ def _statcast_matchup_csv_path(batter_id: int, pitcher_id: int) -> str:
             "type": "details",
         }
     )
-    return f"{STATCAST_MATCHUP_CSV_PATH}?{params}"
+    return f"{STATCAST_MATCHUP_CSV_URL}?{params}"
 
 
 def _clean_event(value: Any) -> str | None:
