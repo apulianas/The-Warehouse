@@ -43,11 +43,13 @@ def lineup_embeds(
             color=ORIOLES_ORANGE,
         )
         embed.add_field(name="Pitcher", value=_limit_field(format_pitcher(game)), inline=False)
-        for index, lineup_field in enumerate(_lineup_fields(format_lineup(game.lineup))):
+        for index, lineup_field in enumerate(
+            _lineup_fields(format_lineup(game.lineup, game.opponent_pitcher))
+        ):
             name = "Batting order" if index == 0 else "Batting order continued"
             embed.add_field(name=name, value=lineup_field, inline=False)
 
-        opponent_lineup = format_lineup(game.opponent_lineup)
+        opponent_lineup = format_lineup(game.opponent_lineup, game.pitcher)
         embed.add_field(
             name=f"{game.opponent} batting order (click to reveal)",
             value=_spoiler(opponent_lineup),

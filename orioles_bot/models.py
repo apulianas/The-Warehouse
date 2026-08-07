@@ -38,6 +38,7 @@ class GameInfo:
     orioles_score: int | None
     opponent_score: int | None
     pitcher: PitcherInfo | None
+    opponent_pitcher: PitcherInfo | None
     lineup: tuple[LineupPlayer, ...]
     opponent_lineup: tuple[LineupPlayer, ...]
 

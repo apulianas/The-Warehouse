@@ -3,7 +3,8 @@ from __future__ import annotations
 from datetime import date
 from zoneinfo import ZoneInfo
 
-from .models import GameInfo, LineupPlayer, ORIOLES_TEAM_NAME, TransactionInfo
+from .mlb import savant_matchup_url
+from .models import GameInfo, LineupPlayer, ORIOLES_TEAM_NAME, PitcherInfo, TransactionInfo
 
 
 def format_game_title(game: GameInfo) -> str:
@@ -31,15 +32,22 @@ def format_pitcher(game: GameInfo) -> str:
     return f"{game.pitcher.status}: {game.pitcher.name}"
 
 
-def format_lineup(players: tuple[LineupPlayer, ...]) -> str:
+def format_lineup(
+    players: tuple[LineupPlayer, ...], opposing_pitcher: PitcherInfo | None = None
+) -> str:
     if not players:
         return "Lineup has not been posted yet."
 
     lines = []
     for player in players:
+        link = (
+            savant_matchup_url(player.player_id, opposing_pitcher.player_id)
+            if opposing_pitcher and opposing_pitcher.player_id
+            else player.headshot_url
+        )
         lines.append(
             f"{player.batting_order}. {player.position} "
-            f"[{player.name}]({player.headshot_url})"
+            f"[{player.name}]({link})"
         )
     return "\n".join(lines)
 

@@ -3,7 +3,13 @@ from __future__ import annotations
 from datetime import date
 
 from orioles_bot.formatting import format_lineup, format_no_transactions, format_transaction
-from orioles_bot.mlb import build_mlb_url, headshot_url, parse_game, parse_transaction
+from orioles_bot.mlb import (
+    build_mlb_url,
+    headshot_url,
+    parse_game,
+    parse_transaction,
+    savant_matchup_url,
+)
 from orioles_bot.models import LineupPlayer
 
 
@@ -37,7 +43,10 @@ def test_parse_game_extracts_orioles_lineup_from_live_feed() -> None:
                 "team": {"id": 110, "name": "Baltimore Orioles"},
                 "probablePitcher": {"id": 99, "fullName": "Probable Pitcher"},
             },
-            "away": {"team": {"id": 147, "name": "New York Yankees"}},
+            "away": {
+                "team": {"id": 147, "name": "New York Yankees"},
+                "probablePitcher": {"id": 199, "fullName": "Opponent Starter"},
+            },
         },
     }
     feed = {
@@ -75,6 +84,15 @@ def test_parse_game_extracts_orioles_lineup_from_live_feed() -> None:
     assert game.pitcher is not None
     assert game.pitcher.name == "Confirmed Starter"
     assert game.pitcher.status == "Starting pitcher"
+    assert game.opponent_pitcher is not None
+    assert game.opponent_pitcher.name == "Opponent Starter"
+
+
+def test_savant_matchup_url_filters_batter_and_pitcher() -> None:
+    assert savant_matchup_url(101, 201) == (
+        "https://baseballsavant.mlb.com/statcast_search?"
+        "hfBatters=101%7C&hfPitchers=201%7C&player_type=batter&type=batter"
+    )
 
 
 def test_format_lineup_links_player_headshots() -> None:
