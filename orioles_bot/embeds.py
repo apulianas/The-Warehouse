@@ -60,11 +60,11 @@ def lineup_embeds(
         )
         for index, lineup_field in enumerate(_lineup_fields(opponent_lineup)):
             name = (
-                f"{game.opponent} batting order (click to reveal)"
+                f"{game.opponent} batting order"
                 if index == 0
                 else f"{game.opponent} batting order continued"
             )
-            embed.add_field(name=name, value=_spoiler(lineup_field), inline=False)
+            embed.add_field(name=name, value=lineup_field, inline=False)
 
         embed.set_footer(text=f"{ORIOLES_TEAM_NAME} • Game PK {game.game_pk}")
         embeds.append(embed)

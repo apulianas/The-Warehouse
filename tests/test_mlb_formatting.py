@@ -92,7 +92,8 @@ def test_parse_game_extracts_orioles_lineup_from_live_feed() -> None:
 def test_savant_matchup_url_filters_batter_and_pitcher() -> None:
     assert savant_matchup_url(101, 201) == (
         "https://baseballsavant.mlb.com/statcast_search?"
-        "hfBatters=101%7C&hfPitchers=201%7C&player_type=batter&type=batter"
+        "all=true&hfBatters=101%7C&hfPitchers=201%7C&group_by=name&"
+        "player_type=batter&type=batter"
     )
 
 
