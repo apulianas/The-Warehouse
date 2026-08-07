@@ -415,6 +415,39 @@ def test_format_standings_row_omits_the_next_game_when_unknown() -> None:
     assert "Next:" not in format_standings_row(_record(), {}, EASTERN)
 
 
+def test_format_standings_marks_teams_with_the_same_next_opponent() -> None:
+    standings = _standings(
+        _record(team_id=110, team_name="Baltimore Orioles", division_rank="1"),
+        _record(team_id=139, team_name="Tampa Bay Rays", division_rank="2"),
+    )
+    next_games = {
+        110: NextGame(
+            team_id=110,
+            opponent="Tampa Bay Rays",
+            opponent_abbreviation="TB",
+            opponent_team_id=139,
+            is_home=True,
+            game_date=None,
+            status="Scheduled",
+        ),
+        139: NextGame(
+            team_id=139,
+            opponent="Baltimore Orioles",
+            opponent_abbreviation="BAL",
+            opponent_team_id=110,
+            is_home=False,
+            game_date=None,
+            status="Scheduled",
+        ),
+    }
+
+    lines = format_standings(standings, next_games).splitlines()
+
+    assert lines[0] == "Pairings: same colored dot = next opponent"
+    assert lines[1][0] == lines[3][0]
+    assert lines[1][0] in "🔴🟠🟡🟢🔵🟣"
+
+
 def test_format_next_game_marks_an_away_game_and_a_live_status() -> None:
     next_game = NextGame(
         team_id=110,

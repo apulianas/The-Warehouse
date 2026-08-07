@@ -24,6 +24,15 @@ from .models import (
     WildCardStandings,
 )
 
+PAIRING_MARKERS = (
+    "🔴",
+    "🟠",
+    "🟡",
+    "🟢",
+    "🔵",
+    "🟣",
+)
+
 
 def format_game_title(game: GameInfo) -> str:
     matchup = f"{game.away_team} at {game.home_team}"
@@ -300,6 +309,7 @@ def format_standings_row(
     record: TeamRecord,
     next_games: Mapping[int, NextGame] | None = None,
     time_zone: ZoneInfo | None = None,
+    pairing_marker: str | None = None,
 ) -> str:
     """One division line: rank, team, record, GB, streak, and the next game.
 
@@ -312,8 +322,9 @@ def format_standings_row(
         name = f"{name} ({record.clinch_indicator})"
     if record.is_orioles:
         name = f"**{name}**"
+    marker = f"{pairing_marker} " if pairing_marker else ""
     line = (
-        f"{rank}. {name} — {record.wins}-{record.losses} "
+        f"{marker}{rank}. {name} — {record.wins}-{record.losses} "
         f"({format_rate_text(record.winning_percentage)}), "
         f"GB {format_games_back(record.games_back)}, "
         f"{format_streak(record.streak)}"
@@ -364,10 +375,19 @@ def format_standings(
 ) -> str:
     if not standings.teams:
         return "Standings are not available yet."
-    return "\n".join(
-        format_standings_row(record, next_games, time_zone)
+    pairing_markers = _pairing_markers(standings.teams, next_games)
+    lines = [
+        format_standings_row(
+            record,
+            next_games,
+            time_zone,
+            pairing_markers.get(record.team_id),
+        )
         for record in standings.teams
-    )
+    ]
+    if pairing_markers:
+        lines.insert(0, "Pairings: same colored dot = next opponent")
+    return "\n".join(lines)
 
 
 def format_orioles_standing(standings: DivisionStandings) -> str | None:
@@ -413,6 +433,7 @@ def format_wild_card_row(
     record: TeamRecord,
     next_games: Mapping[int, NextGame] | None = None,
     time_zone: ZoneInfo | None = None,
+    pairing_marker: str | None = None,
 ) -> str:
     """One wild card line, showing games up on or back of the last berth."""
     rank = record.wild_card_rank or "-"
@@ -421,8 +442,9 @@ def format_wild_card_row(
         name = f"{name} ({record.clinch_indicator})"
     if record.is_orioles:
         name = f"**{name}**"
+    marker = f"{pairing_marker} " if pairing_marker else ""
     line = (
-        f"{rank}. {name} — {record.wins}-{record.losses} "
+        f"{marker}{rank}. {name} — {record.wins}-{record.losses} "
         f"({format_rate_text(record.winning_percentage)}), "
         f"{format_wild_card_gap(record)}, "
         f"{format_streak(record.streak)}"
@@ -458,14 +480,50 @@ def format_wild_card(
     if not standings.teams:
         return "Wild card standings are not available yet."
 
+    pairing_markers = _pairing_markers(standings.teams, next_games)
     lines: list[str] = []
     line_drawn = False
     for index, record in enumerate(standings.teams):
         if not line_drawn and _is_below_the_line(record, index):
             lines.append(PLAYOFF_LINE)
             line_drawn = True
-        lines.append(format_wild_card_row(record, next_games, time_zone))
+        lines.append(
+            format_wild_card_row(
+                record,
+                next_games,
+                time_zone,
+                pairing_markers.get(record.team_id),
+            )
+        )
+    if pairing_markers:
+        lines.insert(0, "Pairings: same colored dot = next opponent")
     return "\n".join(lines)
+
+
+def _pairing_markers(
+    records: tuple[TeamRecord, ...],
+    next_games: Mapping[int, NextGame] | None,
+) -> dict[int, str]:
+    """Assign the same colored marker to teams sharing the next game."""
+    if not next_games:
+        return {}
+
+    record_ids = {record.team_id for record in records}
+    pairs = sorted(
+        {
+            tuple(sorted((record.team_id, next_game.opponent_team_id)))
+            for record in records
+            if (next_game := next_games.get(record.team_id)) is not None
+            and next_game.opponent_team_id in record_ids
+            and next_game.opponent_team_id != record.team_id
+        }
+    )
+    markers: dict[int, str] = {}
+    for index, pair in enumerate(pairs):
+        marker = PAIRING_MARKERS[index % len(PAIRING_MARKERS)]
+        markers[pair[0]] = marker
+        markers[pair[1]] = marker
+    return markers
 
 
 def _is_below_the_line(record: TeamRecord, index: int) -> bool:
