@@ -36,20 +36,27 @@ class PlayerStatsService:
         self._roster: tuple[PlayerRef, ...] = ()
         self._roster_fetched_at: float | None = None
         self._lock = asyncio.Lock()
+        # Autocomplete fires on every keystroke, so a cold roster would other-
+        # wise send one request per waiting coroutine. A dedicated lock keeps
+        # that fetch single-flighted without serializing unrelated stat calls.
+        self._roster_lock = asyncio.Lock()
 
     async def roster(self, client: MlbClient) -> tuple[PlayerRef, ...]:
-        async with self._lock:
-            if self._roster_fetched_at is not None and (
-                self._now() - self._roster_fetched_at < self.roster_ttl_seconds
-            ):
+        async with self._roster_lock:
+            if self._fresh_roster() is not None:
                 return self._roster
 
-        roster = await client.fetch_roster()
-
-        async with self._lock:
+            roster = await client.fetch_roster()
             self._roster = roster
             self._roster_fetched_at = self._now()
             return self._roster
+
+    def _fresh_roster(self) -> tuple[PlayerRef, ...] | None:
+        if self._roster_fetched_at is None:
+            return None
+        if self._now() - self._roster_fetched_at >= self.roster_ttl_seconds:
+            return None
+        return self._roster
 
     async def autocomplete(
         self, client: MlbClient, query: str
