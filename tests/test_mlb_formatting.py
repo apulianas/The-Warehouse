@@ -14,11 +14,18 @@ from orioles_bot.mlb import (
     headshot_url,
     parse_game,
     parse_transaction,
+    parse_transactions,
     savant_player_url,
     savant_preview_url,
     savant_team_matchup_url,
 )
-from orioles_bot.models import GameInfo, LineupPlayer, PitcherInfo
+from orioles_bot.models import (
+    GameInfo,
+    LineupPlayer,
+    PitcherInfo,
+    TransactionInfo,
+    TransactionPlayer,
+)
 
 
 def test_build_mlb_url_sorts_and_encodes_query_params() -> None:
@@ -130,8 +137,10 @@ def test_parse_and_format_transaction() -> None:
 
     assert transaction.transaction_id == "55"
     assert transaction.headshot_url == headshot_url(123)
-    assert format_transaction(transaction).startswith(
-        "**Recalled** — [Example Player](https://baseballsavant.mlb.com/savant-player/123)"
+    assert format_transaction(transaction) == (
+        "**Recalled** — Baltimore Orioles recalled "
+        "[Example Player](https://baseballsavant.mlb.com/savant-player/123) "
+        "from Norfolk Tides."
     )
 
 
@@ -218,4 +227,107 @@ def test_format_lineup_heading_omits_link_without_team_ids() -> None:
 
     assert format_lineup_heading("Baltimore Orioles", 110, None, pitcher) == (
         "**Baltimore Orioles batting order**"
+    )
+
+
+_TRADE_DESCRIPTION = (
+    "Baltimore Orioles traded 1B Ryan O'Hearn, RF Ramón Laureano and cash to "
+    "San Diego Padres for LHP Boston Bateman and SS Cobb Hightower."
+)
+
+
+def _trade_rows() -> list[dict[str, object]]:
+    people = [
+        (669720, "Ryan O'Hearn"),
+        (657656, "Ramón Laureano"),
+        (695549, "Boston Bateman"),
+        (702000, "Cobb Hightower"),
+    ]
+    rows: list[dict[str, object]] = [
+        {
+            "id": 860371,
+            "effectiveDate": "2025-07-31",
+            "typeDesc": "Trade",
+            "description": _TRADE_DESCRIPTION,
+        }
+    ]
+    rows.extend(
+        {
+            "id": 860371,
+            "effectiveDate": "2025-07-31",
+            "person": {"id": person_id, "fullName": name},
+            "typeDesc": "Trade",
+            "description": _TRADE_DESCRIPTION,
+        }
+        for person_id, name in people
+    )
+    return rows
+
+
+def test_parse_transactions_merges_rows_into_one_entry() -> None:
+    merged = parse_transactions(_trade_rows(), date(2025, 7, 31))
+
+    assert len(merged) == 1
+    assert [player.name for player in merged[0].players] == [
+        "Ryan O'Hearn",
+        "Ramón Laureano",
+        "Boston Bateman",
+        "Cobb Hightower",
+    ]
+    assert merged[0].player_id == 669720
+    assert merged[0].headshot_url == headshot_url(669720)
+
+
+def test_format_transaction_links_every_player_in_a_trade() -> None:
+    body = format_transaction(parse_transactions(_trade_rows(), date(2025, 7, 31))[0])
+
+    for player_id, name in (
+        (669720, "Ryan O'Hearn"),
+        (657656, "Ramón Laureano"),
+        (695549, "Boston Bateman"),
+        (702000, "Cobb Hightower"),
+    ):
+        assert f"[{name}]({savant_player_url(player_id)})" in body
+    assert "San Diego Padres" in body
+    assert body.count("savant-player") == 4
+
+
+def test_format_transaction_does_not_nest_links_for_overlapping_names() -> None:
+    transaction = TransactionInfo(
+        transaction_id="1",
+        date=date(2026, 8, 6),
+        player_id=1,
+        player_name="Bobby Witt",
+        type_description="Trade",
+        description="Orioles traded Bobby Witt Jr. and Bobby Witt for cash.",
+        headshot_url=None,
+        players=(
+            TransactionPlayer(1, "Bobby Witt"),
+            TransactionPlayer(2, "Bobby Witt Jr."),
+        ),
+    )
+
+    body = format_transaction(transaction)
+
+    assert "[Bobby Witt Jr.](https://baseballsavant.mlb.com/savant-player/2)" in body
+    assert body.count("](") == 2
+    assert "savant-player/1)" in body
+
+
+def test_format_transaction_falls_back_when_description_omits_the_player() -> None:
+    transaction = TransactionInfo(
+        transaction_id="2",
+        date=date(2026, 8, 6),
+        player_id=7,
+        player_name="Hidden Player",
+        type_description="Status Change",
+        description="Baltimore Orioles activated a player from the injured list.",
+        headshot_url=None,
+        players=(TransactionPlayer(7, "Hidden Player"),),
+    )
+
+    assert format_transaction(transaction) == (
+        "**Status Change** — "
+        f"[Hidden Player]({savant_player_url(7)}): "
+        "Baltimore Orioles activated a player from the injured list."
     )
