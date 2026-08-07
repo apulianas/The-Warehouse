@@ -163,10 +163,26 @@ class TeamRecord:
     run_differential: int | None = None
     division_leader: bool = False
     clinch_indicator: str | None = None
+    wild_card_rank: str | None = None
+    wild_card_leader: bool = False
 
     @property
     def is_orioles(self) -> bool:
         return self.team_id == ORIOLES_TEAM_ID
+
+
+@dataclass(frozen=True)
+class WildCardStandings:
+    """The wild card race for one league, ordered by wild card rank.
+
+    Division leaders are excluded by the API, since they hold a playoff spot
+    outright and are not chasing one.
+    """
+
+    league_id: int | None
+    league_name: str
+    teams: tuple[TeamRecord, ...]
+    season: str | None = None
 
 
 @dataclass(frozen=True)
