@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import date
 from zoneinfo import ZoneInfo
 
@@ -14,14 +15,17 @@ from .formatting import (
     format_pitcher,
     format_transaction,
 )
-from .models import GameInfo, ORIOLES_TEAM_NAME, TransactionInfo
+from .models import GameInfo, MatchupAnnotation, ORIOLES_TEAM_NAME, TransactionInfo
 
 
 ORIOLES_ORANGE = discord.Color.from_rgb(223, 70, 1)
 
 
 def lineup_embeds(
-    games: list[GameInfo], target_date: date, time_zone: ZoneInfo
+    games: list[GameInfo],
+    target_date: date,
+    time_zone: ZoneInfo,
+    matchup_annotations: Mapping[tuple[int, int], MatchupAnnotation] | None = None,
 ) -> list[discord.Embed]:
     if not games:
         return [
@@ -44,17 +48,23 @@ def lineup_embeds(
         )
         embed.add_field(name="Pitcher", value=_limit_field(format_pitcher(game)), inline=False)
         for index, lineup_field in enumerate(
-            _lineup_fields(format_lineup(game.lineup, game.opponent_pitcher))
+            _lineup_fields(
+                format_lineup(game.lineup, game.opponent_pitcher, matchup_annotations)
+            )
         ):
             name = "Batting order" if index == 0 else "Batting order continued"
             embed.add_field(name=name, value=lineup_field, inline=False)
 
-        opponent_lineup = format_lineup(game.opponent_lineup, game.pitcher)
-        embed.add_field(
-            name=f"{game.opponent} batting order (click to reveal)",
-            value=_spoiler(opponent_lineup),
-            inline=False,
+        opponent_lineup = format_lineup(
+            game.opponent_lineup, game.pitcher, matchup_annotations
         )
+        for index, lineup_field in enumerate(_lineup_fields(opponent_lineup)):
+            name = (
+                f"{game.opponent} batting order (click to reveal)"
+                if index == 0
+                else f"{game.opponent} batting order continued"
+            )
+            embed.add_field(name=name, value=_spoiler(lineup_field), inline=False)
 
         embed.set_footer(text=f"{ORIOLES_TEAM_NAME} • Game PK {game.game_pk}")
         embeds.append(embed)

@@ -1,0 +1,123 @@
+from __future__ import annotations
+
+import asyncio
+from datetime import date
+from zoneinfo import ZoneInfo
+
+from orioles_bot.embeds import lineup_embeds
+from orioles_bot.formatting import format_lineup
+from orioles_bot.matchups import MatchupService, calculate_matchup_annotation
+from orioles_bot.mlb import headshot_url, savant_matchup_url
+from orioles_bot.models import GameInfo, LineupPlayer, MatchupAnnotation, PitcherInfo
+
+
+def _records(values: list[float]) -> list[dict[str, object]]:
+    return [
+        {"events": "single", "woba_value": value, "woba_denom": 1}
+        for value in values
+    ]
+
+
+def test_calculate_matchup_annotation_hot() -> None:
+    annotation = calculate_matchup_annotation(_records([0.7, 0.5, 0.4, 0.4, 0.2]), 5)
+
+    assert annotation is not None
+    assert annotation.emoji == "🔥"
+    assert annotation.metric_name == "wOBA"
+    assert round(annotation.metric_value, 3) == 0.44
+    assert annotation.plate_appearances == 5
+
+
+def test_calculate_matchup_annotation_cold() -> None:
+    annotation = calculate_matchup_annotation(_records([0.0, 0.1, 0.2, 0.3, 0.4]), 5)
+
+    assert annotation == MatchupAnnotation("🧊", "wOBA", 0.2, 5)
+
+
+def test_calculate_matchup_annotation_neutral() -> None:
+    annotation = calculate_matchup_annotation(_records([0.32, 0.32, 0.32, 0.32, 0.32]), 5)
+
+    assert annotation is None
+
+
+def test_calculate_matchup_annotation_insufficient_sample() -> None:
+    annotation = calculate_matchup_annotation(_records([0.8, 0.8, 0.8, 0.8]), 5)
+
+    assert annotation is None
+
+
+def test_matchup_service_caches_pairs_for_process_lifetime() -> None:
+    calls = 0
+
+    def fetcher(batter_id: int, pitcher_id: int) -> list[dict[str, object]]:
+        nonlocal calls
+        calls += 1
+        assert (batter_id, pitcher_id) == (101, 201)
+        return _records([0.7, 0.5, 0.4, 0.4, 0.2])
+
+    async def run() -> None:
+        service = MatchupService(min_pa=5, fetcher=fetcher)
+        first = await service.fetch_many([(101, 201), (101, 201)])
+        second = await service.fetch_many([(101, 201)])
+        assert first == second
+
+    asyncio.run(run())
+    assert calls == 1
+
+
+def test_format_lineup_preserves_savant_matchup_url_and_adds_annotation() -> None:
+    player = LineupPlayer(101, "Leadoff Hitter", "CF", 1, headshot_url(101))
+    pitcher = PitcherInfo(201, "Opponent Starter")
+    annotation = MatchupAnnotation("🔥", "wOBA", 0.44, 5)
+
+    assert format_lineup((player,), pitcher, {(101, 201): annotation}) == (
+        "1. CF [Leadoff Hitter 🔥]"
+        f"({savant_matchup_url(101, 201)}) (.440 wOBA, 5 PA)"
+    )
+
+
+def test_format_lineup_gracefully_ignores_annotations_without_pitcher() -> None:
+    player = LineupPlayer(101, "Leadoff Hitter", "CF", 1, headshot_url(101))
+    annotation = MatchupAnnotation("🔥", "wOBA", 0.44, 5)
+
+    assert format_lineup((player,), None, {(101, 201): annotation}) == (
+        "1. CF [Leadoff Hitter]"
+        f"({headshot_url(101)})"
+    )
+
+
+def test_lineup_embeds_include_annotations_for_both_teams() -> None:
+    orioles_hitter = LineupPlayer(101, "Orioles Hitter", "SS", 1, headshot_url(101))
+    opponent_hitter = LineupPlayer(301, "Opponent Hitter", "LF", 1, headshot_url(301))
+    game = GameInfo(
+        game_pk=1,
+        game_date=None,
+        status="Pre-Game",
+        venue="Oriole Park at Camden Yards",
+        home_team="Baltimore Orioles",
+        away_team="New York Yankees",
+        opponent="New York Yankees",
+        is_home=True,
+        orioles_score=None,
+        opponent_score=None,
+        pitcher=PitcherInfo(201, "Orioles Starter"),
+        opponent_pitcher=PitcherInfo(401, "Opponent Starter"),
+        lineup=(orioles_hitter,),
+        opponent_lineup=(opponent_hitter,),
+    )
+
+    embed = lineup_embeds(
+        [game],
+        date(2026, 8, 6),
+        ZoneInfo("UTC"),
+        {
+            (101, 401): MatchupAnnotation("🔥", "wOBA", 0.5, 8),
+            (301, 201): MatchupAnnotation("🧊", "wOBA", 0.1, 6),
+        },
+    )[0]
+
+    field_values = "\n".join(field.value for field in embed.fields)
+    assert "Orioles Hitter 🔥" in field_values
+    assert "Opponent Hitter 🧊" in field_values
+    assert savant_matchup_url(101, 401) in field_values
+    assert savant_matchup_url(301, 201) in field_values

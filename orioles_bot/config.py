@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 DEFAULT_TIME_ZONE = "America/New_York"
 DEFAULT_POLL_INTERVAL_SECONDS = 300
+DEFAULT_MATCHUP_MIN_PA = 5
 STATE_FILE = "/data/state.json"
 
 
@@ -15,6 +16,7 @@ class BotConfig:
     discord_token: str
     discord_channel_id: int | None
     poll_interval_seconds: int
+    matchup_min_pa: int
     time_zone: ZoneInfo
     state_file: str = STATE_FILE
 
@@ -41,6 +43,12 @@ def load_config() -> BotConfig:
     if poll_interval < 30:
         raise ValueError("POLL_INTERVAL_SECONDS must be at least 30")
 
+    matchup_min_pa = _optional_int(os.getenv("MATCHUP_MIN_PA"), "MATCHUP_MIN_PA")
+    if matchup_min_pa is None:
+        matchup_min_pa = DEFAULT_MATCHUP_MIN_PA
+    if matchup_min_pa < 1:
+        raise ValueError("MATCHUP_MIN_PA must be at least 1")
+
     time_zone_name = os.getenv("TIME_ZONE", DEFAULT_TIME_ZONE).strip() or DEFAULT_TIME_ZONE
     try:
         time_zone = ZoneInfo(time_zone_name)
@@ -51,5 +59,6 @@ def load_config() -> BotConfig:
         discord_token=token,
         discord_channel_id=_optional_int(os.getenv("DISCORD_CHANNEL_ID"), "DISCORD_CHANNEL_ID"),
         poll_interval_seconds=poll_interval,
+        matchup_min_pa=matchup_min_pa,
         time_zone=time_zone,
     )
