@@ -269,3 +269,81 @@ def test_webhook_state_key_excludes_the_token(tmp_path) -> None:
     assert "super-secret-token" not in path.read_text(encoding="utf-8")
     assert not state.unseen(channel_key("transaction:1", "webhook:12345678901234567"))
     assert state.unseen(channel_key("transaction:1", "webhook:999"))
+
+
+def _txn(tid: str, player_id, players, name="Coby Mayo"):
+    from datetime import date
+
+    from orioles_bot.models import TransactionInfo
+
+    return TransactionInfo(
+        transaction_id=tid,
+        date=date(2026, 8, 6),
+        player_id=player_id,
+        player_name=name,
+        type_description="Recalled",
+        description=f"Orioles recalled {name}.",
+        headshot_url=None if player_id is None else f"thumb-{player_id}",
+        players=players,
+    )
+
+
+def test_single_player_transaction_gets_a_large_headshot() -> None:
+    from orioles_bot.embeds import transaction_embeds
+    from orioles_bot.models import TransactionPlayer
+
+    payload = transaction_embeds(
+        [_txn("1", 683002, (TransactionPlayer(683002, "Coby Mayo"),))],
+        _txn("1", 683002, ()).date,
+    )[0].to_dict()
+
+    assert payload["image"]["url"].endswith("/people/683002/headshot/67/current")
+    assert "w_426" in payload["image"]["url"]
+    assert "thumbnail" not in payload
+
+
+def test_multi_player_transaction_keeps_a_thumbnail() -> None:
+    """One face would misrepresent a trade involving several players."""
+    from orioles_bot.embeds import transaction_embeds
+    from orioles_bot.models import TransactionPlayer
+
+    payload = transaction_embeds(
+        [
+            _txn(
+                "1",
+                1,
+                (TransactionPlayer(1, "A Player"), TransactionPlayer(2, "B Player")),
+            )
+        ],
+        _txn("1", 1, ()).date,
+    )[0].to_dict()
+
+    assert "image" not in payload
+    assert payload["thumbnail"]["url"] == "thumb-1"
+
+
+def test_transaction_digest_keeps_a_thumbnail() -> None:
+    from orioles_bot.embeds import transaction_embeds
+    from orioles_bot.models import TransactionPlayer
+
+    payload = transaction_embeds(
+        [
+            _txn("1", 1, (TransactionPlayer(1, "A"),)),
+            _txn("2", 2, (TransactionPlayer(2, "B"),)),
+        ],
+        _txn("1", 1, ()).date,
+    )[0].to_dict()
+
+    assert "image" not in payload
+    assert payload["thumbnail"]["url"] == "thumb-1"
+
+
+def test_transaction_without_a_player_id_has_no_image() -> None:
+    from orioles_bot.embeds import transaction_embeds
+
+    payload = transaction_embeds([_txn("1", None, ())], _txn("1", 1, ()).date)[
+        0
+    ].to_dict()
+
+    assert "image" not in payload
+    assert "thumbnail" not in payload

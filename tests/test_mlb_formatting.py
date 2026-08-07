@@ -43,8 +43,21 @@ def test_build_mlb_url_sorts_and_encodes_query_params() -> None:
 def test_headshot_url_uses_mlb_static_template() -> None:
     assert headshot_url(12345) == (
         "https://img.mlbstatic.com/mlb-photos/image/upload/"
-        "w_180,q_auto:good/v1/people/12345/headshot/67/current"
+        "d_people:generic:headshot:67:current.png,w_180,q_auto:good"
+        "/v1/people/12345/headshot/67/current"
     )
+
+
+def test_headshot_url_accepts_a_larger_width() -> None:
+    from orioles_bot.mlb import HEADSHOT_FEATURE_WIDTH
+
+    assert "w_426,q_auto:good" in headshot_url(12345, HEADSHOT_FEATURE_WIDTH)
+
+
+def test_headshot_url_always_requests_a_default_image() -> None:
+    """Players with no photo must fall back to a silhouette, not a 404."""
+    for width in (180, 426):
+        assert "d_people:generic:headshot:67:current.png" in headshot_url(1, width)
 
 
 def test_parse_game_extracts_orioles_lineup_from_live_feed() -> None:

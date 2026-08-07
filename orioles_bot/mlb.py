@@ -19,10 +19,16 @@ from .models import (
 
 
 BASE_URL = "https://statsapi.mlb.com/api/v1"
+# d_... is a Cloudinary default: players without a photo (minor leaguers, new
+# signings) return MLB's generic silhouette instead of a 404, which Discord
+# would otherwise render as a broken image.
 HEADSHOT_URL_TEMPLATE = (
     "https://img.mlbstatic.com/mlb-photos/image/upload/"
-    "w_180,q_auto:good/v1/people/{player_id}/headshot/67/current"
+    "d_people:generic:headshot:67:current.png,w_{width},q_auto:good"
+    "/v1/people/{player_id}/headshot/67/current"
 )
+HEADSHOT_THUMBNAIL_WIDTH = 180
+HEADSHOT_FEATURE_WIDTH = 426
 BASEBALL_SAVANT_PLAYER_URL = "https://baseballsavant.mlb.com/savant-player"
 BASEBALL_SAVANT_PREVIEW_URL = "https://baseballsavant.mlb.com/preview"
 BASEBALL_SAVANT_PLAYER_MATCHUP_URL = "https://baseballsavant.mlb.com/player_matchup"
@@ -46,8 +52,10 @@ def build_mlb_url(path: str, params: dict[str, Any] | None = None) -> str:
     return f"{BASE_URL}{normalized}?{urlencode(clean_params, doseq=True)}"
 
 
-def headshot_url(player_id: int | str) -> str:
-    return HEADSHOT_URL_TEMPLATE.format(player_id=player_id)
+def headshot_url(
+    player_id: int | str, width: int = HEADSHOT_THUMBNAIL_WIDTH
+) -> str:
+    return HEADSHOT_URL_TEMPLATE.format(player_id=player_id, width=width)
 
 
 def savant_matchup_params(batter_id: int | str, pitcher_id: int | str) -> str:
