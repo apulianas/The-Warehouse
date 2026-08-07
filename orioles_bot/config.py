@@ -14,11 +14,15 @@ STATE_FILE = "/data/state.json"
 @dataclass(frozen=True)
 class BotConfig:
     discord_token: str
-    discord_channel_id: int | None
+    discord_channel_ids: tuple[int, ...]
     poll_interval_seconds: int
     matchup_min_pa: int
     time_zone: ZoneInfo
     state_file: str = STATE_FILE
+
+    @property
+    def discord_channel_id(self) -> int | None:
+        return self.discord_channel_ids[0] if self.discord_channel_ids else None
 
 
 def _optional_int(value: str | None, name: str) -> int | None:
@@ -28,6 +32,24 @@ def _optional_int(value: str | None, name: str) -> int | None:
         return int(value)
     except ValueError as exc:
         raise ValueError(f"{name} must be an integer") from exc
+
+
+def _channel_ids(value: str | None, name: str) -> tuple[int, ...]:
+    """Parse one channel id, or several separated by commas or whitespace."""
+    if value is None or not value.strip():
+        return ()
+
+    ids: list[int] = []
+    for raw in value.replace(",", " ").split():
+        try:
+            channel_id = int(raw)
+        except ValueError as exc:
+            raise ValueError(
+                f"{name} must be a channel id, or several separated by commas"
+            ) from exc
+        if channel_id not in ids:
+            ids.append(channel_id)
+    return tuple(ids)
 
 
 def load_config() -> BotConfig:
@@ -57,7 +79,9 @@ def load_config() -> BotConfig:
 
     return BotConfig(
         discord_token=token,
-        discord_channel_id=_optional_int(os.getenv("DISCORD_CHANNEL_ID"), "DISCORD_CHANNEL_ID"),
+        discord_channel_ids=_channel_ids(
+            os.getenv("DISCORD_CHANNEL_ID"), "DISCORD_CHANNEL_ID"
+        ),
         poll_interval_seconds=poll_interval,
         matchup_min_pa=matchup_min_pa,
         time_zone=time_zone,
