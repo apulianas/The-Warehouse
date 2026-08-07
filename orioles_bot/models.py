@@ -39,6 +39,7 @@ class GameInfo:
     opponent_score: int | None
     pitcher: PitcherInfo | None
     lineup: tuple[LineupPlayer, ...]
+    opponent_lineup: tuple[LineupPlayer, ...]
 
 
 @dataclass(frozen=True)

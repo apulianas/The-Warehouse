@@ -71,6 +71,7 @@ def test_parse_game_extracts_orioles_lineup_from_live_feed() -> None:
     assert game.opponent == "New York Yankees"
     assert game.is_home is True
     assert [player.name for player in game.lineup] == ["Leadoff Hitter", "Second Hitter"]
+    assert game.opponent_lineup == ()
     assert game.pitcher is not None
     assert game.pitcher.name == "Confirmed Starter"
     assert game.pitcher.status == "Starting pitcher"
