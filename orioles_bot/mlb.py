@@ -49,8 +49,10 @@ def headshot_url(player_id: int | str) -> str:
 def savant_matchup_url(batter_id: int | str, pitcher_id: int | str) -> str:
     params = urlencode(
         {
+            "all": "true",
             "hfBatters": f"{batter_id}|",
             "hfPitchers": f"{pitcher_id}|",
+            "group_by": "name",
             "player_type": "batter",
             "type": "batter",
         }
