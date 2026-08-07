@@ -14,6 +14,7 @@ from orioles_bot.mlb import (
     parse_game,
     parse_transaction,
     savant_player_url,
+    savant_preview_url,
 )
 from orioles_bot.models import GameInfo, LineupPlayer, PitcherInfo
 
@@ -175,4 +176,10 @@ def _game_with_pitchers(
         opponent_pitcher=opponent_pitcher,
         lineup=(),
         opponent_lineup=(),
+    )
+
+
+def test_savant_preview_url_uses_game_pk() -> None:
+    assert savant_preview_url(823937) == (
+        "https://baseballsavant.mlb.com/preview?game_pk=823937"
     )

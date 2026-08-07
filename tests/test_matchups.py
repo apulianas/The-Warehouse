@@ -16,6 +16,7 @@ from orioles_bot.matchups import (
 from orioles_bot.mlb import (
     headshot_url,
     savant_player_url,
+    savant_preview_url,
     team_logo_url,
 )
 from orioles_bot.models import GameInfo, LineupPlayer, MatchupAnnotation, PitcherInfo
@@ -155,3 +156,58 @@ def test_calculate_matchup_annotation_parses_savant_csv_rows() -> None:
     assert annotation is not None
     assert annotation.emoji == "🔥"
     assert annotation.plate_appearances == 5
+
+
+def test_lineup_embeds_link_statcast_game_preview() -> None:
+    game = GameInfo(
+        game_pk=823937,
+        game_date=None,
+        status="Pre-Game",
+        venue="Oriole Park at Camden Yards",
+        home_team="Baltimore Orioles",
+        home_team_id=110,
+        away_team="New York Yankees",
+        opponent="New York Yankees",
+        is_home=True,
+        orioles_score=None,
+        opponent_score=None,
+        pitcher=PitcherInfo(201, "Orioles Starter"),
+        opponent_pitcher=PitcherInfo(401, "Opponent Starter"),
+        lineup=(LineupPlayer(101, "Orioles Hitter", "SS", 1, headshot_url(101)),),
+        opponent_lineup=(),
+    )
+
+    embed = lineup_embeds([game], date(2026, 8, 6), ZoneInfo("UTC"))[0]
+
+    preview = savant_preview_url(823937)
+    assert embed.url == preview
+    assert (embed.description or "").endswith(f"[Statcast game preview]({preview})")
+
+
+def test_lineup_embeds_keep_preview_link_when_description_overflows() -> None:
+    roster = tuple(
+        LineupPlayer(1000 + index, f"Player Name Number {index}", "SS", index, "")
+        for index in range(1, 400)
+    )
+    game = GameInfo(
+        game_pk=823937,
+        game_date=None,
+        status="Pre-Game",
+        venue="Oriole Park at Camden Yards",
+        home_team="Baltimore Orioles",
+        home_team_id=110,
+        away_team="New York Yankees",
+        opponent="New York Yankees",
+        is_home=True,
+        orioles_score=None,
+        opponent_score=None,
+        pitcher=None,
+        opponent_pitcher=None,
+        lineup=roster,
+        opponent_lineup=roster,
+    )
+
+    body = lineup_embeds([game], date(2026, 8, 6), ZoneInfo("UTC"))[0].description or ""
+
+    assert len(body) <= 4096
+    assert body.endswith(f"[Statcast game preview]({savant_preview_url(823937)})")

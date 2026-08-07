@@ -9,7 +9,9 @@ A Dockerized Python 3.12 Discord bot that posts Baltimore Orioles lineups and ro
   - `/transactions [date]` — Orioles roster transactions for a date.
   - `/help` — command help.
 - Discord embeds with game status, venue, score when available, both batting orders, positions, both starting pitchers, transaction details, and hot/cold matchup emojis with the underlying wOBA and plate appearances when enough history exists.
-- Every player name — batters, both starters, and transaction players — links to their Baseball Savant player page. Batter-versus-pitcher history is fetched from Baseball Savant and rendered inline rather than linked, because the Statcast search page cannot be deep-linked with a pre-filled matchup filter.
+- Every player name — batters, both starters, and transaction players — links to their Baseball Savant player page.
+- Each lineup embed links to the Statcast game preview for that game, which shows both lineups with advanced metrics and batter-versus-pitcher splits.
+- Batter-versus-pitcher history is fetched from Baseball Savant and rendered inline rather than linked, because the Statcast search page cannot be deep-linked with a pre-filled matchup filter.
 - Both batting orders render as single 1-9 lists in one embed.
 - The embed thumbnail shows the home team's logo for the ballpark hosting the game.
 - Background polling for today's lineup and transaction updates.
@@ -80,6 +82,8 @@ New York Yankees batting order
 1. RF Aaron Judge 🧊 (.267 wOBA, 24 PA)
 2. DH Giancarlo Stanton
 ...
+
+Statcast game preview
 ```
 
 Both lineups appear in the same embed, every name links to Baseball Savant, and the thumbnail shows the home team's logo.
