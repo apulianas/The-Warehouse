@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
@@ -10,7 +11,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
-from .config import BotConfig, load_config
+from .config import BotConfig, load_config, webhook_id
 from .dates import parse_user_date, today_in_zone
 from .embeds import error_embed, help_embed, lineup_embeds, transaction_embeds
 from .matchups import MatchupService
@@ -20,6 +21,17 @@ from .state import AnnouncementState, channel_key
 
 
 LOGGER = logging.getLogger(__name__)
+
+
+def webhook_label(url: str) -> str:
+    return f"webhook {webhook_id(url)}"
+
+
+@dataclass(frozen=True)
+class _AnnouncementTarget:
+    key_id: str
+    label: str
+    destination: discord.abc.Messageable | discord.Webhook
 
 
 class OriolesBot(commands.Bot):
@@ -44,14 +56,19 @@ class OriolesBot(commands.Bot):
         self.tree.add_command(_transactions_command(self))
         self.tree.add_command(_help_command())
         await self.tree.sync()
-        if self.config.discord_channel_ids:
+        if self.config.has_announcement_targets:
             self.poll_updates.change_interval(seconds=self.config.poll_interval_seconds)
             self.poll_updates.start()
             LOGGER.info(
-                "Started update polling every %s seconds for %s channel(s): %s",
+                "Started update polling every %s seconds for %s channel(s) "
+                "and %s webhook(s): %s",
                 self.config.poll_interval_seconds,
                 len(self.config.discord_channel_ids),
-                ", ".join(str(item) for item in self.config.discord_channel_ids),
+                len(self.config.discord_webhook_urls),
+                ", ".join(
+                    [str(item) for item in self.config.discord_channel_ids]
+                    + [webhook_label(url) for url in self.config.discord_webhook_urls]
+                ),
             )
 
     async def close(self) -> None:
@@ -66,11 +83,11 @@ class OriolesBot(commands.Bot):
 
     @tasks.loop(seconds=300)
     async def poll_updates(self) -> None:
-        if not self.config.discord_channel_ids or self.mlb is None:
+        if not self.config.has_announcement_targets or self.mlb is None:
             return
 
-        channels = await self._announcement_channels()
-        if not channels:
+        targets = await self._announcement_targets()
+        if not targets:
             return
 
         target_date = today_in_zone(self.config.time_zone)
@@ -88,9 +105,9 @@ class OriolesBot(commands.Bot):
             if not key:
                 continue
             pending = [
-                (channel_id, channel)
-                for channel_id, channel in channels
-                if self.announcement_state.unseen(channel_key(key, channel_id))
+                target
+                for target in targets
+                if self.announcement_state.unseen(channel_key(key, target.key_id))
             ]
             if not pending:
                 continue
@@ -98,28 +115,20 @@ class OriolesBot(commands.Bot):
             embeds = lineup_embeds(
                 [game], target_date, self.config.time_zone, matchup_annotations
             )
-            for channel_id, channel in pending:
-                await self._announce(
-                    channel, channel_id, key, "Orioles lineup update", embeds
-                )
+            for target in pending:
+                await self._announce(target, key, "Orioles lineup update", embeds)
 
         for transaction in transactions:
             key = transaction_announcement_key(transaction)
             embeds = transaction_embeds([transaction], target_date)
-            for channel_id, channel in channels:
-                if self.announcement_state.unseen(channel_key(key, channel_id)):
+            for target in targets:
+                if self.announcement_state.unseen(channel_key(key, target.key_id)):
                     await self._announce(
-                        channel,
-                        channel_id,
-                        key,
-                        "Orioles roster transaction",
-                        embeds,
+                        target, key, "Orioles roster transaction", embeds
                     )
 
-    async def _announcement_channels(
-        self,
-    ) -> list[tuple[int, discord.abc.Messageable]]:
-        channels: list[tuple[int, discord.abc.Messageable]] = []
+    async def _announcement_targets(self) -> list[_AnnouncementTarget]:
+        targets: list[_AnnouncementTarget] = []
         for channel_id in self.config.discord_channel_ids:
             channel = self.get_channel(channel_id)
             if channel is None:
@@ -131,24 +140,39 @@ class OriolesBot(commands.Bot):
             if not isinstance(channel, discord.abc.Messageable):
                 LOGGER.warning("Channel %s is not messageable", channel_id)
                 continue
-            channels.append((channel_id, channel))
-        return channels
+            targets.append(
+                _AnnouncementTarget(str(channel_id), f"channel {channel_id}", channel)
+            )
+
+        for url in self.config.discord_webhook_urls:
+            if self.session is None:
+                break
+            try:
+                webhook = discord.Webhook.from_url(url, session=self.session)
+            except (ValueError, discord.DiscordException) as exc:
+                LOGGER.warning("Webhook %s is unusable: %s", webhook_label(url), exc)
+                continue
+            targets.append(
+                _AnnouncementTarget(
+                    f"webhook:{webhook_id(url)}", webhook_label(url), webhook
+                )
+            )
+        return targets
 
     async def _announce(
         self,
-        channel: discord.abc.Messageable,
-        channel_id: int,
+        target: _AnnouncementTarget,
         key: str,
         content: str,
         embeds: list[discord.Embed],
     ) -> None:
-        """Post to one channel, marking it sent only for that channel."""
+        """Post to one target, marking it sent only for that target."""
         try:
-            await channel.send(content=content, embeds=embeds)
+            await target.destination.send(content=content, embeds=embeds)
         except discord.DiscordException as exc:
-            LOGGER.warning("Could not post to channel %s: %s", channel_id, exc)
+            LOGGER.warning("Could not post to %s: %s", target.label, exc)
             return
-        self.announcement_state.mark(channel_key(key, channel_id))
+        self.announcement_state.mark(channel_key(key, target.key_id))
 
     @poll_updates.before_loop
     async def before_poll_updates(self) -> None:

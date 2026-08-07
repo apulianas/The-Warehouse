@@ -78,3 +78,63 @@ def test_load_config_rejects_invalid_channel(monkeypatch: pytest.MonkeyPatch) ->
 
     with pytest.raises(ValueError, match="DISCORD_CHANNEL_ID must be a channel id"):
         load_config()
+
+
+URL_A = "https://discord.com/api/webhooks/12345678901234567/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+URL_B = "https://discord.com/api/webhooks/98765432109876543/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+
+def test_load_config_reads_webhook_urls(monkeypatch: pytest.MonkeyPatch) -> None:
+    _base_env(monkeypatch)
+    monkeypatch.delenv("DISCORD_CHANNEL_ID", raising=False)
+    monkeypatch.setenv("DISCORD_WEBHOOK_URL", f"{URL_A},{URL_B}")
+
+    config = load_config()
+
+    assert config.discord_webhook_urls == (URL_A, URL_B)
+    assert config.has_announcement_targets
+
+
+def test_load_config_rejects_non_webhook_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    _base_env(monkeypatch)
+    monkeypatch.delenv("DISCORD_CHANNEL_ID", raising=False)
+    monkeypatch.setenv("DISCORD_WEBHOOK_URL", "https://example.com/hook")
+
+    with pytest.raises(ValueError, match="DISCORD_WEBHOOK_URL must contain"):
+        load_config()
+
+
+def test_has_announcement_targets_false_without_any(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _base_env(monkeypatch)
+    monkeypatch.delenv("DISCORD_CHANNEL_ID", raising=False)
+    monkeypatch.delenv("DISCORD_WEBHOOK_URL", raising=False)
+
+    assert not load_config().has_announcement_targets
+
+
+def test_load_config_rejects_webhook_url_missing_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A truncated copy/paste must fail at startup, not silently at post time."""
+    _base_env(monkeypatch)
+    monkeypatch.delenv("DISCORD_CHANNEL_ID", raising=False)
+    monkeypatch.setenv(
+        "DISCORD_WEBHOOK_URL", "https://discord.com/api/webhooks/12345678901234567"
+    )
+
+    with pytest.raises(ValueError, match="DISCORD_WEBHOOK_URL must contain"):
+        load_config()
+
+
+def test_webhook_urls_accepted_by_discord_py(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Anything our config accepts must also parse in discord.Webhook.from_url."""
+    import discord
+
+    _base_env(monkeypatch)
+    monkeypatch.delenv("DISCORD_CHANNEL_ID", raising=False)
+    monkeypatch.setenv("DISCORD_WEBHOOK_URL", URL_A)
+
+    for url in load_config().discord_webhook_urls:
+        assert discord.Webhook.from_url(url, session=None).id == 12345678901234567
