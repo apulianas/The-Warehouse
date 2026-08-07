@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 import discord
 
 from .formatting import (
+    WILD_CARD_SPOTS,
     format_game_time,
     format_game_title,
     format_lineup,
@@ -18,6 +19,7 @@ from .formatting import (
     format_no_standings,
     format_no_transactions,
     format_orioles_standing,
+    format_orioles_wild_card,
     format_pitchers,
     format_pitching_split,
     format_player_heading,
@@ -27,6 +29,7 @@ from .formatting import (
     format_standings,
     format_stats_window,
     format_transaction,
+    format_wild_card,
 )
 from .mlb import (
     HEADSHOT_FEATURE_WIDTH,
@@ -48,6 +51,7 @@ from .models import (
     ScheduleWindow,
     StatsWindow,
     TransactionInfo,
+    WildCardStandings,
 )
 
 
@@ -232,8 +236,40 @@ def standings_embed(
     return embed
 
 
-def schedule_embeds(
-    games: Sequence[GameInfo], window: ScheduleWindow, time_zone: ZoneInfo
+def wild_card_embed(
+    standings: WildCardStandings | None,
+    next_games: Mapping[int, NextGame] | None = None,
+    time_zone: ZoneInfo | None = None,
+) -> discord.Embed:
+    if standings is None:
+        return discord.Embed(
+            title="AL wild card",
+            description=format_no_standings(),
+            color=ORIOLES_ORANGE,
+        )
+
+    title = f"{standings.league_name} wild card"
+    if standings.season:
+        title = f"{title} — {standings.season}"
+
+    embed = discord.Embed(
+        title=title,
+        description=_limit_description(
+            format_wild_card(standings, next_games, time_zone)
+        ),
+        color=ORIOLES_ORANGE,
+    )
+    embed.set_thumbnail(url=team_logo_url(ORIOLES_TEAM_ID))
+    summary = format_orioles_wild_card(standings)
+    embed.set_footer(
+        text=f"{summary} • Top {WILD_CARD_SPOTS} make the playoffs"
+        if summary
+        else f"Top {WILD_CARD_SPOTS} make the playoffs"
+    )
+    return embed
+
+
+def schedule_embeds(    games: Sequence[GameInfo], window: ScheduleWindow, time_zone: ZoneInfo
 ) -> list[discord.Embed]:
     if not games:
         return [
@@ -294,10 +330,11 @@ def help_embed() -> discord.Embed:
         inline=False,
     )
     embed.add_field(
-        name="/standings",
+        name="/standings [view]",
         value=(
-            "Show the AL East standings with each team's record, games back, "
-            "streak, and next opponent."
+            "Show the AL wild card race and the AL East, with each team's record, "
+            "games back, streak, and next opponent. The wild card view marks the "
+            "playoff line. Pick a view to see just one."
         ),
         inline=False,
     )

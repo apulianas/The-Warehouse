@@ -5,6 +5,7 @@ import logging
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import aiohttp
 import discord
@@ -31,6 +32,7 @@ from .embeds import (
     schedule_embeds,
     standings_embed,
     transaction_embeds,
+    wild_card_embed,
 )
 from .formatting import format_player_not_found
 from .matchups import MatchupService
@@ -41,6 +43,7 @@ from .models import (
     GameInfo,
     NextGame,
     TransactionInfo,
+    WildCardStandings,
 )
 from .player_stats import PlayerStatsService
 from .state import AnnouncementState, channel_key
@@ -60,7 +63,12 @@ StatsDays = app_commands.Range[
 ScheduleDays = app_commands.Range[
     int, MIN_SCHEDULE_WINDOW_DAYS, MAX_SCHEDULE_WINDOW_DAYS
 ]
-StandingsPayload = tuple[DivisionStandings | None, dict[int, NextGame]]
+StandingsPayload = tuple[
+    DivisionStandings | None, WildCardStandings | None, dict[int, NextGame]
+]
+STANDINGS_VIEW_BOTH = "both"
+STANDINGS_VIEW_WILD_CARD = "wildcard"
+STANDINGS_VIEW_DIVISION = "division"
 
 
 def webhook_label(url: str) -> str:
@@ -334,13 +342,28 @@ def _player_stats_command(bot: OriolesBot) -> app_commands.Command[Any, ..., Non
 
 def _standings_command(bot: OriolesBot) -> app_commands.Command[Any, ..., None]:
     @app_commands.command(
-        name="standings", description="Show the AL East standings and next opponents."
+        name="standings",
+        description="Show the AL East standings, the AL wild card race, or both.",
     )
-    async def standings(interaction: discord.Interaction) -> None:
+    @app_commands.describe(
+        view="Which picture to show — defaults to the wild card race and the AL East"
+    )
+    @app_commands.choices(
+        view=[
+            app_commands.Choice(name="Both", value=STANDINGS_VIEW_BOTH),
+            app_commands.Choice(name="Wild card", value=STANDINGS_VIEW_WILD_CARD),
+            app_commands.Choice(name="AL East", value=STANDINGS_VIEW_DIVISION),
+        ]
+    )
+    async def standings(
+        interaction: discord.Interaction,
+        view: app_commands.Choice[str] | None = None,
+    ) -> None:
+        selected = view.value if view is not None else STANDINGS_VIEW_BOTH
         await interaction.response.defer(ephemeral=True)
         client = _require_mlb(bot)
         try:
-            division, next_games = await bot.standings_cache.get_or_fetch(
+            payload = await bot.standings_cache.get_or_fetch(
                 AL_EAST_DIVISION_ID,
                 lambda: _fetch_standings_payload(bot, client),
             )
@@ -349,33 +372,53 @@ def _standings_command(bot: OriolesBot) -> app_commands.Command[Any, ..., None]:
             return
 
         await interaction.followup.send(
-            embed=standings_embed(division, next_games, bot.config.time_zone)
+            embeds=_standings_embeds(payload, selected, bot.config.time_zone)
         )
 
     return standings
 
 
+def _standings_embeds(
+    payload: StandingsPayload, view: str, time_zone: ZoneInfo
+) -> list[discord.Embed]:
+    """The requested embeds, wild card first since it is the wider picture."""
+    division, wild_card, next_games = payload
+    embeds: list[discord.Embed] = []
+    if view in {STANDINGS_VIEW_BOTH, STANDINGS_VIEW_WILD_CARD}:
+        embeds.append(wild_card_embed(wild_card, next_games, time_zone))
+    if view in {STANDINGS_VIEW_BOTH, STANDINGS_VIEW_DIVISION}:
+        embeds.append(standings_embed(division, next_games, time_zone))
+    return embeds
+
+
 async def _fetch_standings_payload(
     bot: OriolesBot, client: MlbClient
 ) -> StandingsPayload:
-    """Standings plus each team's next game, fetched together so they cache as one.
+    """Division standings, the wild card race, and every team's next game.
 
-    The next-game lookup is best effort: a failure there should still leave the
-    standings postable rather than turning the whole command into an error.
+    All three are fetched together so one cache entry serves any view, and the
+    next-game lookup covers both tables in a single schedule request. That
+    lookup is best effort: a failure there should still leave the standings
+    postable rather than turning the whole command into an error.
     """
     division = await client.fetch_division_standings(AL_EAST_DIVISION_ID)
-    if division is None or not division.teams:
-        return division, {}
+    wild_card = await client.fetch_wild_card_standings()
+
+    team_ids = [record.team_id for record in (division.teams if division else ())]
+    team_ids.extend(
+        record.team_id for record in (wild_card.teams if wild_card else ())
+    )
+    if not team_ids:
+        return division, wild_card, {}
 
     try:
         next_games = await client.fetch_next_games(
-            [record.team_id for record in division.teams],
-            today_in_zone(bot.config.time_zone),
+            team_ids, today_in_zone(bot.config.time_zone)
         )
     except MlbApiError as exc:
         LOGGER.warning("Standings posted without next games: %s", exc)
         next_games = {}
-    return division, next_games
+    return division, wild_card, next_games
 
 
 def _schedule_command(bot: OriolesBot) -> app_commands.Command[Any, ..., None]:
