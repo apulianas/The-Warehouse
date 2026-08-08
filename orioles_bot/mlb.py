@@ -12,7 +12,10 @@ import aiohttp
 from .models import (
     AL_EAST_DIVISION_ID,
     AMERICAN_LEAGUE_ID,
+    FINISHED_GAME_STATES,
     ORIOLES_TEAM_ID,
+    ORIOLES_TEAM_NAME,
+    UNPLAYED_GAME_STATES,
     DivisionStandings,
     GameInfo,
     HittingSplit,
@@ -24,10 +27,12 @@ from .models import (
     PlayerRef,
     ScheduleWindow,
     StatsWindow,
+    Substitution,
     TeamRecord,
     TransactionInfo,
     TransactionPlayer,
     WildCardStandings,
+    normalize_game_state,
 )
 
 
@@ -48,10 +53,9 @@ BASEBALL_SAVANT_PLAYER_MATCHUP_URL = "https://baseballsavant.mlb.com/player_matc
 TEAM_LOGO_URL_TEMPLATE = "https://midfield.mlbstatic.com/v1/team/{team_id}/spots/240"
 PLAYER_SEARCH_LIMIT = 25
 NEXT_GAME_LOOKAHEAD_DAYS = 10
-# A game in one of these states is behind the team, so it is never "next". An
-# in-progress game still counts, since that is what the team is playing now.
-FINISHED_GAME_STATES = {"final", "game over", "completed early", "completed"}
-UNPLAYED_GAME_STATES = {"postponed", "cancelled", "canceled", "suspended"}
+# A game in FINISHED_GAME_STATES or UNPLAYED_GAME_STATES is behind the team, so
+# it is never "next". An in-progress game still counts, since that is what the
+# team is playing now. Both sets live in models.py alongside the game states.
 
 
 class MlbApiError(RuntimeError):
@@ -215,6 +219,43 @@ class MlbClient:
         data = await self._get_json(f"/people/{player_id}")
         people = parse_people(data)
         return people[0] if people else None
+
+    async def fetch_handedness(
+        self, player_ids: Sequence[int]
+    ) -> dict[int, tuple[str | None, str | None]]:
+        """Bat side and throwing hand per player, in one batched request.
+
+        The boxscore only carries names and ids, so handedness has to come from
+        ``/people``. Returns ``{player_id: (bats, throws)}`` with codes like
+        ``L``, ``R`` or ``S``.
+        """
+        unique_ids = sorted({int(player_id) for player_id in player_ids})
+        if not unique_ids:
+            return {}
+        data = await self._get_json(
+            "/people", {"personIds": ",".join(str(item) for item in unique_ids)}
+        )
+        return parse_handedness(data)
+
+    async def fetch_platoon_splits(
+        self, player_id: int, season: int
+    ) -> dict[str, HittingSplit]:
+        """This season's hitting line against left and right handed pitching.
+
+        Keyed by ``vl`` and ``vr`` so a caller can pick the side matching the
+        pitcher actually on the mound.
+        """
+        data = await self._get_json(
+            f"/people/{player_id}/stats",
+            {
+                "stats": "statSplits",
+                "sitCodes": "vl,vr",
+                "group": "hitting",
+                "season": season,
+                "sportId": 1,
+            },
+        )
+        return parse_platoon_splits(data)
 
     async def fetch_player_stats(
         self, player_id: int, window: StatsWindow
@@ -426,7 +467,7 @@ def parse_next_games(
 def _is_upcoming(raw_game: dict[str, Any]) -> bool:
     status = raw_game.get("status")
     status = status if isinstance(status, dict) else {}
-    detailed = str(status.get("detailedState") or "").strip().casefold()
+    detailed = normalize_game_state(status.get("detailedState"))
     abstract = str(status.get("abstractGameState") or "").strip().casefold()
     if detailed in UNPLAYED_GAME_STATES:
         return False
@@ -690,16 +731,26 @@ def parse_game(raw_game: dict[str, Any], boxscore: dict[str, Any] | None = None)
     side = _orioles_side(teams)
     other_side = "away" if side == "home" else "home"
     opponent = teams.get(other_side, {}).get("team", {})
-    status = raw_game.get("status", {}).get("detailedState") or "Unknown"
+    status_info = raw_game.get("status")
+    status_info = status_info if isinstance(status_info, dict) else {}
+    status = status_info.get("detailedState") or "Unknown"
+    abstract_status = str(status_info.get("abstractGameState") or "")
+    coded_status = str(status_info.get("codedGameState") or "")
     venue = raw_game.get("venue", {}).get("name") or "TBD"
 
     lineup = _extract_lineup(boxscore, side)
     opponent_lineup = _extract_lineup(boxscore, other_side)
+    starting_lineup = _extract_starting_lineup(boxscore, side)
+    opponent_starting_lineup = _extract_starting_lineup(boxscore, other_side)
     pitcher = _extract_confirmed_pitcher(boxscore, side) or _extract_probable_pitcher(
         teams.get(side, {})
     )
     opponent_pitcher = _extract_confirmed_pitcher(boxscore, other_side) or _extract_probable_pitcher(
         teams.get(other_side, {})
+    )
+    current_pitcher = _extract_current_pitcher(boxscore, side) or pitcher
+    current_opponent_pitcher = (
+        _extract_current_pitcher(boxscore, other_side) or opponent_pitcher
     )
     orioles_score = _safe_int(teams.get(side, {}).get("score"))
     opponent_score = _safe_int(teams.get(other_side, {}).get("score"))
@@ -712,16 +763,37 @@ def parse_game(raw_game: dict[str, Any], boxscore: dict[str, Any] | None = None)
         except ValueError:
             game_date = None
 
+    game_pk = _safe_int(raw_game.get("gamePk")) or 0
+    opponent_name = opponent.get("name") or "Opponent TBD"
+    opponent_team_id = _safe_int(opponent.get("id"))
+    substitutions = tuple(
+        Substitution(
+            game_pk=game_pk,
+            slot=batter.batting_order,
+            batter=batter,
+            replaced=replaced,
+            pitcher=facing,
+            is_orioles=is_orioles,
+            batting_team=ORIOLES_TEAM_NAME if is_orioles else opponent_name,
+            batting_team_id=ORIOLES_TEAM_ID if is_orioles else opponent_team_id,
+        )
+        for is_orioles, batting_side, facing in (
+            (True, side, current_opponent_pitcher),
+            (False, other_side, current_pitcher),
+        )
+        for batter, replaced in _extract_substitutions(boxscore, batting_side)
+    )
+
     return GameInfo(
-        game_pk=_safe_int(raw_game.get("gamePk")) or 0,
+        game_pk=game_pk,
         game_date=game_date,
         status=status,
         venue=venue,
         home_team=teams.get("home", {}).get("team", {}).get("name") or "Home",
         home_team_id=_safe_int(teams.get("home", {}).get("team", {}).get("id")),
         away_team=teams.get("away", {}).get("team", {}).get("name") or "Away",
-        opponent=opponent.get("name") or "Opponent TBD",
-        opponent_team_id=_safe_int(opponent.get("id")),
+        opponent=opponent_name,
+        opponent_team_id=opponent_team_id,
         is_home=side == "home",
         orioles_score=orioles_score,
         opponent_score=opponent_score,
@@ -729,6 +801,13 @@ def parse_game(raw_game: dict[str, Any], boxscore: dict[str, Any] | None = None)
         opponent_pitcher=opponent_pitcher,
         lineup=lineup,
         opponent_lineup=opponent_lineup,
+        starting_lineup=starting_lineup,
+        opponent_starting_lineup=opponent_starting_lineup,
+        current_pitcher=current_pitcher,
+        current_opponent_pitcher=current_opponent_pitcher,
+        substitutions=substitutions,
+        abstract_status=abstract_status,
+        coded_status=coded_status,
     )
 
 
@@ -820,6 +899,7 @@ def _orioles_side(teams: dict[str, Any]) -> str:
 
 
 def _extract_lineup(boxscore: dict[str, Any] | None, side: str) -> tuple[LineupPlayer, ...]:
+    """The batting order as it stands now, substitutions included."""
     team_box = _boxscore_team(boxscore, side)
     batting_order = team_box.get("battingOrder") or []
     players = team_box.get("players") or {}
@@ -830,26 +910,108 @@ def _extract_lineup(boxscore: dict[str, Any] | None, side: str) -> tuple[LineupP
         if player_id is None:
             continue
         player = players.get(f"ID{player_id}", {})
-        person = player.get("person", {})
-        position = player.get("position", {})
-        lineup.append(
-            LineupPlayer(
-                player_id=player_id,
-                name=person.get("fullName") or f"Player {player_id}",
-                position=position.get("abbreviation") or position.get("name") or "—",
-                batting_order=index,
-                headshot_url=headshot_url(player_id),
-            )
-        )
+        lineup.append(_lineup_player(player_id, player, index))
     return tuple(lineup)
 
 
+def _lineup_player(
+    player_id: int, player: dict[str, Any], slot: int
+) -> LineupPlayer:
+    person = player.get("person", {}) if isinstance(player, dict) else {}
+    position = player.get("position", {}) if isinstance(player, dict) else {}
+    _, sequence = _batting_order_code(player)
+    return LineupPlayer(
+        player_id=player_id,
+        name=person.get("fullName") or f"Player {player_id}",
+        position=position.get("abbreviation") or position.get("name") or "—",
+        batting_order=slot,
+        headshot_url=headshot_url(player_id),
+        substitution_order=sequence,
+    )
+
+
+def _batting_order_code(player: Any) -> tuple[int | None, int]:
+    """Split a boxscore ``battingOrder`` code into its slot and sub sequence.
+
+    MLB encodes the code as ``slot * 100 + n``: ``500`` is the starter batting
+    fifth, ``501`` the first hitter to replace them, ``502`` the next.
+    """
+    if not isinstance(player, dict):
+        return None, 0
+    code = _safe_int(player.get("battingOrder"))
+    if code is None or code < 100:
+        return None, 0
+    return code // 100, code % 100
+
+
+def _extract_starting_lineup(
+    boxscore: dict[str, Any] | None, side: str
+) -> tuple[LineupPlayer, ...]:
+    """Only the nine hitters who were announced before first pitch."""
+    team_box = _boxscore_team(boxscore, side)
+    players = team_box.get("players") or {}
+    starters: list[LineupPlayer] = []
+    for player in players.values():
+        slot, sequence = _batting_order_code(player)
+        if slot is None or sequence != 0:
+            continue
+        player_id = _safe_int(player.get("person", {}).get("id"))
+        if player_id is None:
+            continue
+        starters.append(_lineup_player(player_id, player, slot))
+    starters.sort(key=lambda entry: entry.batting_order)
+    return tuple(starters)
+
+
+def _extract_substitutions(
+    boxscore: dict[str, Any] | None, side: str
+) -> tuple[tuple[LineupPlayer, LineupPlayer | None], ...]:
+    """Each replacement hitter paired with the hitter they came in for.
+
+    The player replaced is whoever held the slot immediately before them, so a
+    double switch late in a slot still credits the right name.
+    """
+    team_box = _boxscore_team(boxscore, side)
+    players = team_box.get("players") or {}
+    by_slot: dict[int, dict[int, LineupPlayer]] = {}
+    for player in players.values():
+        slot, sequence = _batting_order_code(player)
+        if slot is None:
+            continue
+        player_id = _safe_int(player.get("person", {}).get("id"))
+        if player_id is None:
+            continue
+        by_slot.setdefault(slot, {})[sequence] = _lineup_player(
+            player_id, player, slot
+        )
+
+    pairs: list[tuple[LineupPlayer, LineupPlayer | None]] = []
+    for slot in sorted(by_slot):
+        occupants = by_slot[slot]
+        for sequence in sorted(occupants):
+            if sequence == 0:
+                continue
+            pairs.append((occupants[sequence], occupants.get(sequence - 1)))
+    return tuple(pairs)
+
+
 def _extract_confirmed_pitcher(boxscore: dict[str, Any] | None, side: str) -> PitcherInfo | None:
+    return _extract_pitcher_at(boxscore, side, 0, "Starting pitcher")
+
+
+def _extract_current_pitcher(boxscore: dict[str, Any] | None, side: str) -> PitcherInfo | None:
+    """Whoever is on the mound now — the last arm the boxscore lists."""
+    return _extract_pitcher_at(boxscore, side, -1, "Pitching")
+
+
+def _extract_pitcher_at(
+    boxscore: dict[str, Any] | None, side: str, index: int, status: str
+) -> PitcherInfo | None:
     team_box = _boxscore_team(boxscore, side)
     pitcher_ids = team_box.get("pitchers") or team_box.get("pitchingOrder") or []
     if not pitcher_ids:
         return None
-    player_id = _safe_int(pitcher_ids[0])
+    player_id = _safe_int(pitcher_ids[index])
     if player_id is None:
         return None
 
@@ -861,7 +1023,7 @@ def _extract_confirmed_pitcher(boxscore: dict[str, Any] | None, side: str) -> Pi
         player_id=player_id,
         name=name,
         headshot_url=headshot_url(player_id),
-        status="Starting pitcher",
+        status=status,
     )
 
 
@@ -988,6 +1150,58 @@ def parse_player_stats(
         elif name == "pitching" and pitching is None:
             pitching = parse_pitching_split(stat)
     return hitting, pitching
+
+
+def parse_handedness(data: dict[str, Any]) -> dict[int, tuple[str | None, str | None]]:
+    people = data.get("people")
+    if not isinstance(people, list):
+        return {}
+
+    hands: dict[int, tuple[str | None, str | None]] = {}
+    for person in people:
+        if not isinstance(person, dict):
+            continue
+        player_id = _safe_int(person.get("id"))
+        if player_id is None:
+            continue
+        bat_side = person.get("batSide")
+        pitch_hand = person.get("pitchHand")
+        hands[player_id] = (
+            _hand_code(bat_side),
+            _hand_code(pitch_hand),
+        )
+    return hands
+
+
+def _hand_code(value: Any) -> str | None:
+    if not isinstance(value, dict):
+        return None
+    code = str(value.get("code") or "").strip().upper()
+    return code or None
+
+
+def parse_platoon_splits(data: dict[str, Any]) -> dict[str, HittingSplit]:
+    """Map the ``vl``/``vr`` situational splits onto hitting lines."""
+    groups = data.get("stats")
+    if not isinstance(groups, list):
+        return {}
+
+    splits: dict[str, HittingSplit] = {}
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        entries = group.get("splits")
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            stat = entry.get("stat")
+            code = str((entry.get("split") or {}).get("code") or "").strip().lower()
+            if code not in {"vl", "vr"} or not isinstance(stat, dict):
+                continue
+            splits.setdefault(code, parse_hitting_split(stat))
+    return splits
 
 
 def parse_pitching_game_logs(data: dict[str, Any]) -> tuple[PitchingGame, ...]:

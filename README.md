@@ -37,7 +37,13 @@ A Dockerized Python 3.12 Discord bot that posts Baltimore Orioles lineups, roste
 - Standings and schedules are served from a short-lived TTL cache that collapses
   concurrent lookups into one request, so a burst of commands does not multiply API calls.
 - Background polling for today's lineup and transaction updates.
+- Polling adapts to the schedule: faster in the hours before first pitch, faster
+  again once the game starts, and back to the idle baseline in between.
+  Postponed and cancelled games are treated as idle.
 - Automatic lineup posts wait until both teams' batting orders are available.
+- The full lineup is posted once. Later changes arrive as a compact substitution
+  card for the new hitter, with his history against the pitcher on the mound and
+  his splits versus that hand, instead of reposting the whole batting order.
 - Duplicate announcement prevention across restarts using `/data/state.json`.
 - Graceful empty states when there is no game, lineup, transaction, standings, or
   schedule data.
@@ -117,7 +123,10 @@ even in a webhook-only setup, because the bot needs a Discord session to run.
 | `DISCORD_TOKEN` | Yes | | Discord bot token. Never commit it. |
 | `DISCORD_CHANNEL_ID` | No | | Channel ID for background polling announcements. Separate multiple IDs with commas to post the same updates to several channels. |
 | `DISCORD_WEBHOOK_URL` | No | | Webhook URL for posting into a server where the bot is not installed. Separate multiple URLs with commas. Contains a secret token; keep it out of source control. |
-| `POLL_INTERVAL_SECONDS` | No | `300` | Poll interval for today's updates. Minimum 30 seconds. |
+| `POLL_INTERVAL_SECONDS` | No | `300` | Idle poll interval, used when no game is near. Minimum 30 seconds. |
+| `LIVE_POLL_INTERVAL_SECONDS` | No | `60` | Poll interval while a game is underway, including during a rain delay. Minimum 30 seconds. |
+| `PREGAME_POLL_INTERVAL_SECONDS` | No | `120` | Poll interval in the run up to first pitch, when the lineup card is posted. Minimum 30 seconds. |
+| `PREGAME_LEAD_MINUTES` | No | `240` | How long before first pitch the pre-game interval starts. |
 | `MATCHUP_MIN_PA` | No | `5` | Minimum historical plate appearances versus the opposing starter before a hot/cold emoji is shown. |
 | `TIME_ZONE` | No | `America/New_York` | Time zone used for "today" and display times. |
 
