@@ -9,7 +9,7 @@ from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 from .mlb import savant_matchup_params
-from .models import GameInfo, MatchupAnnotation
+from .models import GameInfo, MatchupAnnotation, MatchupHistory
 
 
 LOGGER = logging.getLogger(__name__)
@@ -23,6 +23,8 @@ COLD_AVERAGE = 0.200
 MATCHUP_FETCH_TIMEOUT_SECONDS = 45
 
 HIT_EVENTS = {"single", "double", "triple", "home_run"}
+WALK_EVENTS = {"walk", "intent_walk"}
+STRIKEOUT_EVENTS = {"strikeout", "strikeout_double_play", "strikeout_triple_play"}
 NON_AT_BAT_EVENTS = {
     "catcher_interf",
     "hit_by_pitch",
@@ -42,7 +44,10 @@ class MatchupService:
     def __init__(self, min_pa: int = 5, fetcher: FetchRecords | None = None) -> None:
         self.min_pa = min_pa
         self._fetcher = fetcher or _fetch_statcast_batter_pitcher
-        self._cache: dict[tuple[int, int], MatchupAnnotation | None] = {}
+        # The full line is cached rather than the hot/cold verdict, so a
+        # substitution card can show a matchup too small or too ordinary to
+        # earn an emoji without refetching it.
+        self._cache: dict[tuple[int, int], MatchupHistory | None] = {}
         self._lock = asyncio.Lock()
 
     async def fetch_for_games(
@@ -65,6 +70,22 @@ class MatchupService:
     async def fetch_many(
         self, pairs: Iterable[tuple[int, int]]
     ) -> dict[tuple[int, int], MatchupAnnotation]:
+        histories = await self.history_many(pairs)
+        return {
+            pair: annotation
+            for pair, history in histories.items()
+            if (annotation := annotation_from_history(history, self.min_pa)) is not None
+        }
+
+    async def history(
+        self, batter_id: int, pitcher_id: int
+    ) -> MatchupHistory | None:
+        histories = await self.history_many([(batter_id, pitcher_id)])
+        return histories.get((batter_id, pitcher_id))
+
+    async def history_many(
+        self, pairs: Iterable[tuple[int, int]]
+    ) -> dict[tuple[int, int], MatchupHistory]:
         unique_pairs = set(pairs)
         if not unique_pairs:
             return {}
@@ -77,25 +98,30 @@ class MatchupService:
                 *(self._fetch_pair(batter_id, pitcher_id) for batter_id, pitcher_id in missing)
             )
             async with self._lock:
-                for pair, annotation in zip(missing, fetched, strict=True):
-                    self._cache.setdefault(pair, annotation)
+                for pair, history in zip(missing, fetched, strict=True):
+                    # A failed fetch is deliberately not cached, so a transient
+                    # Statcast outage does not poison the pair for the life of
+                    # the process. A genuinely empty matchup caches fine, since
+                    # it arrives as a zeroed history rather than None.
+                    if history is not None:
+                        self._cache.setdefault(pair, history)
 
         async with self._lock:
             return {
-                pair: annotation
+                pair: history
                 for pair in unique_pairs
-                if (annotation := self._cache.get(pair)) is not None
+                if (history := self._cache.get(pair)) is not None
             }
 
     async def _fetch_pair(
         self, batter_id: int, pitcher_id: int
-    ) -> MatchupAnnotation | None:
+    ) -> MatchupHistory | None:
         try:
             data = await asyncio.wait_for(
                 asyncio.to_thread(self._fetcher, batter_id, pitcher_id),
                 timeout=MATCHUP_FETCH_TIMEOUT_SECONDS,
             )
-            return calculate_matchup_annotation(_records_from_data(data), self.min_pa)
+            return calculate_matchup_history(_records_from_data(data))
         except Exception as exc:  # noqa: BLE001 - any matchup failure should degrade gracefully.
             LOGGER.info(
                 "Could not fetch matchup data for batter %s vs pitcher %s: %s",
@@ -106,43 +132,100 @@ class MatchupService:
             return None
 
 
-def calculate_matchup_annotation(
-    records: Iterable[Mapping[str, Any]], min_pa: int = 5
-) -> MatchupAnnotation | None:
+def calculate_matchup_history(records: Iterable[Mapping[str, Any]]) -> MatchupHistory:
+    """Total a batter's plate appearances against one pitcher.
+
+    Statcast reports one row per pitch, so only rows carrying an ``events``
+    value close out a plate appearance and count here.
+    """
     plate_appearances = [
         record for record in records if _clean_event(record.get("events")) is not None
     ]
-    pa_count = len(plate_appearances)
-    if pa_count < min_pa:
-        return None
 
     woba_numerator = 0.0
     woba_denominator = 0.0
+    at_bats = 0
+    hits = 0
+    doubles = 0
+    triples = 0
+    home_runs = 0
+    walks = 0
+    strikeouts = 0
+    total_bases = 0
+
     for record in plate_appearances:
         woba_value = _safe_float(record.get("woba_value"))
         woba_denom = _safe_float(record.get("woba_denom"))
-        if woba_value is None or woba_denom is None or woba_denom <= 0:
-            continue
-        woba_numerator += woba_value
-        woba_denominator += woba_denom
+        if woba_value is not None and woba_denom is not None and woba_denom > 0:
+            woba_numerator += woba_value
+            woba_denominator += woba_denom
 
-    if woba_denominator >= min_pa:
-        woba = woba_numerator / woba_denominator
-        return _classify_metric("wOBA", woba, int(round(woba_denominator)))
-
-    hits = 0
-    at_bats = 0
-    for record in plate_appearances:
         event = _clean_event(record.get("events"))
-        if event is None or event in NON_AT_BAT_EVENTS:
+        if event is None:
             continue
+        if event in WALK_EVENTS:
+            walks += 1
+        if event in STRIKEOUT_EVENTS:
+            strikeouts += 1
+        if event in NON_AT_BAT_EVENTS:
+            continue
+
         at_bats += 1
         if event in HIT_EVENTS:
             hits += 1
-    if at_bats == 0:
+            if event == "double":
+                doubles += 1
+                total_bases += 2
+            elif event == "triple":
+                triples += 1
+                total_bases += 3
+            elif event == "home_run":
+                home_runs += 1
+                total_bases += 4
+            else:
+                total_bases += 1
+
+    return MatchupHistory(
+        plate_appearances=len(plate_appearances),
+        at_bats=at_bats,
+        hits=hits,
+        doubles=doubles,
+        triples=triples,
+        home_runs=home_runs,
+        walks=walks,
+        strikeouts=strikeouts,
+        average=hits / at_bats if at_bats else None,
+        slugging_percentage=total_bases / at_bats if at_bats else None,
+        woba=woba_numerator / woba_denominator if woba_denominator > 0 else None,
+        woba_denominator=woba_denominator,
+    )
+
+
+def calculate_matchup_annotation(
+    records: Iterable[Mapping[str, Any]], min_pa: int = 5
+) -> MatchupAnnotation | None:
+    return annotation_from_history(calculate_matchup_history(records), min_pa)
+
+
+def annotation_from_history(
+    history: MatchupHistory, min_pa: int = 5
+) -> MatchupAnnotation | None:
+    """Flag a matchup hot or cold, preferring wOBA and falling back to average.
+
+    A strikeout-heavy sample can leave wOBA thin even when the plate appearance
+    count clears the bar, so average covers that case.
+    """
+    if history.plate_appearances < min_pa:
         return None
-    average = hits / at_bats
-    return _classify_metric("AVG", average, pa_count)
+
+    if history.woba is not None and history.woba_denominator >= min_pa:
+        return _classify_metric(
+            "wOBA", history.woba, int(round(history.woba_denominator))
+        )
+
+    if history.average is None:
+        return None
+    return _classify_metric("AVG", history.average, history.plate_appearances)
 
 
 def _classify_metric(

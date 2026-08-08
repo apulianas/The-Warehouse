@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
-from datetime import date
+from dataclasses import dataclass, replace
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
+from collections.abc import Sequence
 from zoneinfo import ZoneInfo
 
 import aiohttp
@@ -31,6 +32,7 @@ from .embeds import (
     player_stats_embeds,
     schedule_embeds,
     standings_embed,
+    substitution_embeds,
     transaction_embeds,
     wild_card_embed,
 )
@@ -41,7 +43,10 @@ from .models import (
     AL_EAST_DIVISION_ID,
     DivisionStandings,
     GameInfo,
+    HittingSplit,
+    MatchupHistory,
     NextGame,
+    Substitution,
     TransactionInfo,
     WildCardStandings,
 )
@@ -69,6 +74,8 @@ StandingsPayload = tuple[
 STANDINGS_VIEW_BOTH = "both"
 STANDINGS_VIEW_WILD_CARD = "wildcard"
 STANDINGS_VIEW_DIVISION = "division"
+# Which situational split matches the hand the incoming batter will face.
+PLATOON_SPLIT_CODES = {"L": "vl", "R": "vr"}
 
 
 def webhook_label(url: str) -> str:
@@ -98,6 +105,9 @@ class OriolesBot(commands.Bot):
             AsyncTtlCache(SCHEDULE_TTL_SECONDS)
         )
         self.announcement_state = AnnouncementState(config.state_file)
+        # Tracked so the interval is only changed, and logged, when it actually
+        # differs from the cadence already running.
+        self._poll_interval = config.poll_interval_seconds
 
     async def setup_hook(self) -> None:
         self.session = aiohttp.ClientSession()
@@ -159,22 +169,8 @@ class OriolesBot(commands.Bot):
         for game in games:
             if not game.lineup or not game.opponent_lineup:
                 continue
-            key = lineup_announcement_key(target_date, game)
-            if not key:
-                continue
-            pending = [
-                target
-                for target in targets
-                if self.announcement_state.unseen(channel_key(key, target.key_id))
-            ]
-            if not pending:
-                continue
-            matchup_annotations = await self.matchups.fetch_for_games([game])
-            embeds = lineup_embeds(
-                [game], target_date, self.config.time_zone, matchup_annotations
-            )
-            for target in pending:
-                await self._announce(target, key, "Orioles lineup update", embeds)
+            await self._announce_lineup(game, targets, target_date)
+            await self._announce_substitutions(game, targets, target_date)
 
         for transaction in transactions:
             key = transaction_announcement_key(transaction)
@@ -184,6 +180,44 @@ class OriolesBot(commands.Bot):
                     await self._announce(
                         target, key, "Orioles roster transaction", embeds
                     )
+
+        self._apply_poll_interval(games)
+
+    def _apply_poll_interval(self, games: Sequence[GameInfo]) -> None:
+        """Speed polling up around games and slow it back down afterwards."""
+        seconds, reason = poll_interval_for(
+            games, datetime.now(timezone.utc), self.config
+        )
+        if seconds == self._poll_interval:
+            return
+        self._poll_interval = seconds
+        # discord.py recalculates the sleep already in flight, so a change here
+        # takes effect before the next tick rather than after it.
+        self.poll_updates.change_interval(seconds=seconds)
+        LOGGER.info("Polling every %s seconds (%s)", seconds, reason)
+
+    async def _announce_lineup(
+        self,
+        game: GameInfo,
+        targets: list[_AnnouncementTarget],
+        target_date: date,
+    ) -> None:
+        key = lineup_announcement_key(target_date, game)
+        if not key:
+            return
+        pending = [
+            target
+            for target in targets
+            if self.announcement_state.unseen(channel_key(key, target.key_id))
+        ]
+        if not pending:
+            return
+        matchup_annotations = await self.matchups.fetch_for_games([game])
+        embeds = lineup_embeds(
+            [game], target_date, self.config.time_zone, matchup_annotations
+        )
+        for target in pending:
+            await self._announce(target, key, "Orioles lineup update", embeds)
 
     async def _announcement_targets(self) -> list[_AnnouncementTarget]:
         targets: list[_AnnouncementTarget] = []
@@ -231,6 +265,128 @@ class OriolesBot(commands.Bot):
             LOGGER.warning("Could not post to %s: %s", target.label, exc)
             return
         self.announcement_state.mark(channel_key(key, target.key_id))
+
+    async def _announce_substitutions(
+        self,
+        game: GameInfo,
+        targets: list[_AnnouncementTarget],
+        target_date: date,
+    ) -> None:
+        """Post a compact card for each new hitter once the game is underway.
+
+        Before first pitch a changed batting order is a corrected lineup card,
+        which the full lineup post already covers.
+        """
+        if not game.has_started or not game.substitutions:
+            return
+
+        pending: list[tuple[Substitution, str, list[_AnnouncementTarget]]] = []
+        for substitution in game.substitutions:
+            key = substitution_announcement_key(target_date, substitution)
+            waiting = [
+                target
+                for target in targets
+                if self.announcement_state.unseen(channel_key(key, target.key_id))
+            ]
+            if waiting:
+                pending.append((substitution, key, waiting))
+        if not pending:
+            return
+
+        resolved = await self._resolve_substitutions(
+            [substitution for substitution, _, _ in pending]
+        )
+        histories, splits = await self._substitution_stats(resolved, target_date)
+
+        for substitution, (_, key, waiting) in zip(resolved, pending, strict=True):
+            embeds = substitution_embeds([substitution], histories, splits)
+            for target in waiting:
+                await self._announce(
+                    target,
+                    key,
+                    f"{substitution.batting_team} substitution",
+                    embeds,
+                )
+
+    async def _resolve_substitutions(
+        self, substitutions: list[Substitution]
+    ) -> list[Substitution]:
+        """Attach bat side and throwing hand, which the boxscore omits."""
+        player_ids: set[int] = set()
+        for substitution in substitutions:
+            player_ids.add(substitution.batter.player_id)
+            if substitution.pitcher and substitution.pitcher.player_id is not None:
+                player_ids.add(substitution.pitcher.player_id)
+
+        hands: dict[int, tuple[str | None, str | None]] = {}
+        if player_ids and self.mlb is not None:
+            try:
+                hands = await self.mlb.fetch_handedness(sorted(player_ids))
+            except MlbApiError as exc:
+                LOGGER.info("Substitution handedness unavailable: %s", exc)
+
+        resolved: list[Substitution] = []
+        for substitution in substitutions:
+            batter = substitution.batter
+            bat_side = hands.get(batter.player_id, (None, None))[0]
+            pitcher = substitution.pitcher
+            if pitcher is not None and pitcher.player_id is not None:
+                pitcher = replace(
+                    pitcher, throws=hands.get(pitcher.player_id, (None, None))[1]
+                )
+            resolved.append(
+                replace(
+                    substitution,
+                    batter=replace(batter, bat_side=bat_side),
+                    pitcher=pitcher,
+                )
+            )
+        return resolved
+
+    async def _substitution_stats(
+        self, substitutions: list[Substitution], target_date: date
+    ) -> tuple[
+        dict[tuple[int, int], MatchupHistory], dict[int, HittingSplit]
+    ]:
+        """Head-to-head history and platoon splits for the incoming hitters."""
+        pairs = [
+            (substitution.batter.player_id, substitution.pitcher.player_id)
+            for substitution in substitutions
+            if substitution.pitcher is not None
+            and substitution.pitcher.player_id is not None
+        ]
+        histories = await self.matchups.history_many(pairs)
+
+        splits: dict[int, HittingSplit] = {}
+        if self.mlb is None:
+            return histories, splits
+
+        for substitution in substitutions:
+            pitcher = substitution.pitcher
+            hand = pitcher.throws if pitcher is not None else None
+            code = PLATOON_SPLIT_CODES.get(hand or "")
+            if code is None:
+                continue
+            try:
+                player_splits = await self.mlb.fetch_platoon_splits(
+                    substitution.batter.player_id, target_date.year
+                )
+            except MlbApiError as exc:
+                LOGGER.info(
+                    "Platoon split unavailable for %s: %s",
+                    substitution.batter.name,
+                    exc,
+                )
+                continue
+            split = player_splits.get(code)
+            # An absent entry means the lookup failed, so the card says the
+            # split is unavailable rather than claiming there were no plate
+            # appearances. A successful lookup with nothing against this hand
+            # records an empty split, which does make that claim.
+            splits[substitution.batter.player_id] = (
+                split if split is not None else HittingSplit()
+            )
+        return histories, splits
 
     @poll_updates.before_loop
     async def before_poll_updates(self) -> None:
@@ -490,12 +646,60 @@ def _require_mlb(bot: OriolesBot) -> MlbClient:
     return bot.mlb
 
 
+def poll_interval_for(
+    games: Sequence[GameInfo], now: datetime, config: BotConfig
+) -> tuple[int, str]:
+    """Pick a polling cadence for the day's games, with the reason why.
+
+    Three cadences, fastest first:
+
+    * a game underway, including one stuck in a rain delay, since play can
+      resume at any moment and substitutions arrive in bursts;
+    * first pitch approaching, which is when the lineup card drops;
+    * otherwise idle.
+
+    Postponed, cancelled and suspended games are ignored entirely. They keep
+    their original start time all day, so counting them would otherwise pin the
+    bot to the pre-game cadence for hours with nothing left to report.
+    """
+    playable = [game for game in games if not game.is_unplayed]
+
+    if any(game.is_in_progress for game in playable):
+        return config.live_poll_interval_seconds, "a game is in progress"
+
+    window = timedelta(minutes=config.pregame_lead_minutes)
+    for game in playable:
+        if game.is_final:
+            continue
+        # No start time means the game is imminent or TBD; either way it is
+        # worth watching. A start time already past means a delayed start,
+        # where the lineup is usually out and first pitch could come any time.
+        if game.game_date is None or game.game_date - now <= window:
+            return config.pregame_poll_interval_seconds, "a game is coming up"
+
+    return config.poll_interval_seconds, "no game is near"
+
+
 def lineup_announcement_key(target_date: date, game: GameInfo) -> str | None:
-    if not game.lineup:
+    """Identify a posted lineup card.
+
+    Keyed on the announced starters rather than the batting order as it stands,
+    so a pinch hitter does not look like a brand new lineup and trigger a
+    second full post. Pre-game changes still move the key, because those are
+    genuine lineup corrections worth reposting.
+    """
+    starters = game.starting_lineup or game.lineup
+    if not starters:
         return None
-    batting_order = ",".join(str(player.player_id) for player in game.lineup)
+    batting_order = ",".join(str(player.player_id) for player in starters)
     pitcher = game.pitcher.player_id if game.pitcher else "none"
     return f"lineup:{target_date.isoformat()}:{game.game_pk}:{pitcher}:{batting_order}"
+
+
+def substitution_announcement_key(
+    target_date: date, substitution: Substitution
+) -> str:
+    return f"substitution:{target_date.isoformat()}:{substitution.key}"
 
 
 def transaction_announcement_key(transaction: TransactionInfo) -> str:
