@@ -8,6 +8,14 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 DEFAULT_TIME_ZONE = "America/New_York"
 DEFAULT_POLL_INTERVAL_SECONDS = 300
+# Cadences for adaptive polling. During a game substitutions land constantly,
+# and in the hours before first pitch the lineup card can drop at any moment,
+# so both are polled harder than the idle baseline above.
+DEFAULT_LIVE_POLL_INTERVAL_SECONDS = 60
+DEFAULT_PREGAME_POLL_INTERVAL_SECONDS = 120
+# How long before first pitch the pre-game cadence kicks in. Lineups are
+# usually posted around three hours out, so four hours gives some margin.
+DEFAULT_PREGAME_LEAD_MINUTES = 240
 DEFAULT_MATCHUP_MIN_PA = 5
 STATE_FILE = "/data/state.json"
 # Mirrors discord.py's own webhook URL parser so a malformed URL is rejected at
@@ -36,6 +44,9 @@ class BotConfig:
     poll_interval_seconds: int
     matchup_min_pa: int
     time_zone: ZoneInfo
+    live_poll_interval_seconds: int = DEFAULT_LIVE_POLL_INTERVAL_SECONDS
+    pregame_poll_interval_seconds: int = DEFAULT_PREGAME_POLL_INTERVAL_SECONDS
+    pregame_lead_minutes: int = DEFAULT_PREGAME_LEAD_MINUTES
     state_file: str = STATE_FILE
 
     @property
@@ -54,6 +65,20 @@ def _optional_int(value: str | None, name: str) -> int | None:
         return int(value)
     except ValueError as exc:
         raise ValueError(f"{name} must be an integer") from exc
+
+
+def _interval(name: str, default: int) -> int:
+    """Read a poll interval, enforcing the same 30 second floor as the baseline.
+
+    Anything faster risks MLB rate limiting for no practical gain, since the
+    Stats API does not update more often than that.
+    """
+    value = _optional_int(os.getenv(name), name)
+    if value is None:
+        return default
+    if value < 30:
+        raise ValueError(f"{name} must be at least 30")
+    return value
 
 
 def _channel_ids(value: str | None, name: str) -> tuple[int, ...]:
@@ -105,6 +130,21 @@ def load_config() -> BotConfig:
     if poll_interval < 30:
         raise ValueError("POLL_INTERVAL_SECONDS must be at least 30")
 
+    live_poll_interval = _interval(
+        "LIVE_POLL_INTERVAL_SECONDS", DEFAULT_LIVE_POLL_INTERVAL_SECONDS
+    )
+    pregame_poll_interval = _interval(
+        "PREGAME_POLL_INTERVAL_SECONDS", DEFAULT_PREGAME_POLL_INTERVAL_SECONDS
+    )
+
+    pregame_lead = _optional_int(
+        os.getenv("PREGAME_LEAD_MINUTES"), "PREGAME_LEAD_MINUTES"
+    )
+    if pregame_lead is None:
+        pregame_lead = DEFAULT_PREGAME_LEAD_MINUTES
+    if pregame_lead < 0:
+        raise ValueError("PREGAME_LEAD_MINUTES must not be negative")
+
     matchup_min_pa = _optional_int(os.getenv("MATCHUP_MIN_PA"), "MATCHUP_MIN_PA")
     if matchup_min_pa is None:
         matchup_min_pa = DEFAULT_MATCHUP_MIN_PA
@@ -126,6 +166,9 @@ def load_config() -> BotConfig:
             os.getenv("DISCORD_WEBHOOK_URL"), "DISCORD_WEBHOOK_URL"
         ),
         poll_interval_seconds=poll_interval,
+        live_poll_interval_seconds=live_poll_interval,
+        pregame_poll_interval_seconds=pregame_poll_interval,
+        pregame_lead_minutes=pregame_lead,
         matchup_min_pa=matchup_min_pa,
         time_zone=time_zone,
     )

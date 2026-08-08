@@ -11,6 +11,7 @@ from .models import (
     HittingSplit,
     LineupPlayer,
     MatchupAnnotation,
+    MatchupHistory,
     NextGame,
     ORIOLES_TEAM_NAME,
     PitcherInfo,
@@ -19,6 +20,7 @@ from .models import (
     PlayerRef,
     ScheduleWindow,
     StatsWindow,
+    Substitution,
     TeamRecord,
     TransactionInfo,
     TransactionPlayer,
@@ -137,6 +139,93 @@ def _format_matchup_metric(annotation: MatchupAnnotation) -> str:
 
 def format_no_games(target_date: date) -> str:
     return f"No {ORIOLES_TEAM_NAME} game is scheduled for {target_date:%A, %B %-d, %Y}."
+
+
+HAND_NAMES = {"L": "LHP", "R": "RHP", "S": "SHP"}
+BAT_SIDE_NAMES = {"L": "L", "R": "R", "S": "S"}
+
+
+def format_substitution_headline(substitution: Substitution) -> str:
+    """One line naming who came in, for whom, and in which slot."""
+    batter = substitution.batter
+    name = f"[{batter.name}]({savant_player_url(batter.player_id)})"
+    if batter.bat_side:
+        name = f"{name} ({BAT_SIDE_NAMES.get(batter.bat_side, batter.bat_side)})"
+
+    if substitution.replaced is not None:
+        replaced = (
+            f"[{substitution.replaced.name}]"
+            f"({savant_player_url(substitution.replaced.player_id)})"
+        )
+        action = f"{name} replaces {replaced}"
+    else:
+        action = f"{name} enters"
+    return f"{action} — batting {_ordinal(substitution.slot)}, {batter.position}"
+
+
+def format_substitution_pitcher(pitcher: PitcherInfo | None) -> str:
+    if pitcher is None:
+        return "Facing: pitcher not announced"
+    name = (
+        f"[{pitcher.name}]({savant_player_url(pitcher.player_id)})"
+        if pitcher.player_id is not None
+        else pitcher.name
+    )
+    hand = f" ({HAND_NAMES[pitcher.throws]})" if pitcher.throws in HAND_NAMES else ""
+    return f"Facing: {name}{hand}"
+
+
+def format_matchup_history(
+    history: MatchupHistory | None, pitcher: PitcherInfo | None
+) -> str:
+    """The batter's career line against this pitcher, in box score shorthand."""
+    pitcher_name = pitcher.name if pitcher is not None else "this pitcher"
+    if history is None:
+        # Distinct from an empty history: the lookup failed, so claiming there
+        # were no plate appearances would be stating something we do not know.
+        return f"Matchup history against {pitcher_name} is unavailable right now."
+    if not history.has_history:
+        return f"No prior plate appearances against {pitcher_name}."
+
+    line = f"{history.hits}-for-{history.at_bats}"
+    extras = []
+    if history.doubles:
+        extras.append(f"{history.doubles} 2B")
+    if history.triples:
+        extras.append(f"{history.triples} 3B")
+    if history.home_runs:
+        extras.append(f"{history.home_runs} HR")
+    if history.walks:
+        extras.append(f"{history.walks} BB")
+    if history.strikeouts:
+        extras.append(f"{history.strikeouts} K")
+
+    rates = f"{format_rate(history.average)} AVG"
+    if history.slugging_percentage is not None:
+        rates = f"{rates}, {format_rate(history.slugging_percentage)} SLG"
+
+    detail = f"{line}"
+    if extras:
+        detail = f"{detail} ({', '.join(extras)})"
+    return f"{detail} — {rates} in {history.plate_appearances} PA"
+
+
+def format_platoon_split(split: HittingSplit | None, hand: str | None) -> str:
+    """This season's line against the hand the batter is about to see."""
+    label = HAND_NAMES.get(hand or "", "this hand")
+    if split is None:
+        # Distinct from an empty split: the lookup failed, so we cannot say
+        # whether there were plate appearances or not.
+        return f"Splits against {label} are unavailable right now."
+    if not split.plate_appearances:
+        return f"No plate appearances against {label} this season."
+    slash = (
+        f"{format_rate(split.average)}/"
+        f"{format_rate(split.on_base_percentage)}/"
+        f"{format_rate(split.slugging_percentage)}"
+    )
+    counting = f"{split.home_runs} HR, {split.walks} BB, {split.strikeouts} K"
+    return f"{slash} ({format_rate(split.ops)} OPS) — {counting} in {split.plate_appearances} PA"
 
 
 def format_transaction(transaction: TransactionInfo) -> str:
@@ -417,11 +506,17 @@ def format_orioles_standing(standings: DivisionStandings) -> str | None:
     return " • ".join(parts)
 
 
-def _ordinal(rank: str) -> str:
+def _ordinal(rank: str | int) -> str:
+    """Render a rank as "1st", "2nd" and so on.
+
+    Takes standings ranks, which arrive as strings and are passed through
+    unchanged when they are not numeric, as well as batting order slots, which
+    are already integers.
+    """
     try:
         number = int(rank)
     except (TypeError, ValueError):
-        return rank
+        return str(rank)
     if 10 <= number % 100 <= 20:
         suffix = "th"
     else:

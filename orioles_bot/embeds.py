@@ -8,11 +8,13 @@ import discord
 
 from .formatting import (
     WILD_CARD_SPOTS,
+    HAND_NAMES,
     format_game_time,
     format_game_title,
     format_lineup,
     format_lineup_heading,
     format_hitting_split,
+    format_matchup_history,
     format_no_games,
     format_no_player_stats,
     format_no_scheduled_games,
@@ -23,12 +25,15 @@ from .formatting import (
     format_pitchers,
     format_pitching_split,
     format_pitching_game,
+    format_platoon_split,
     format_player_heading,
     format_schedule_day,
     format_schedule_entry,
     format_schedule_window,
     format_standings,
     format_stats_window,
+    format_substitution_headline,
+    format_substitution_pitcher,
     format_transaction,
     format_wild_card,
 )
@@ -44,6 +49,7 @@ from .models import (
     GameInfo,
     HittingSplit,
     MatchupAnnotation,
+    MatchupHistory,
     NextGame,
     ORIOLES_TEAM_ID,
     ORIOLES_TEAM_NAME,
@@ -52,6 +58,7 @@ from .models import (
     PlayerRef,
     ScheduleWindow,
     StatsWindow,
+    Substitution,
     TransactionInfo,
     WildCardStandings,
 )
@@ -119,6 +126,57 @@ def lineup_embeds(
         if game.home_team_id is not None:
             embed.set_thumbnail(url=team_logo_url(game.home_team_id))
         embed.set_footer(text=f"{ORIOLES_TEAM_NAME} • Game PK {game.game_pk}")
+        embeds.append(embed)
+    return embeds
+
+
+SUBSTITUTION_COLOR = discord.Color.from_rgb(45, 125, 70)
+
+
+def substitution_embeds(
+    substitutions: Sequence[Substitution],
+    histories: Mapping[tuple[int, int], MatchupHistory] | None = None,
+    platoon_splits: Mapping[int, HittingSplit] | None = None,
+) -> list[discord.Embed]:
+    """One compact card per hitter who entered the game.
+
+    Deliberately narrow: a substitution is worth a note about the new bat, not
+    a repost of the whole batting order.
+    """
+    embeds: list[discord.Embed] = []
+    for substitution in substitutions:
+        batter = substitution.batter
+        pitcher = substitution.pitcher
+        history = None
+        if histories is not None and pitcher is not None and pitcher.player_id is not None:
+            history = histories.get((batter.player_id, pitcher.player_id))
+        split = (platoon_splits or {}).get(batter.player_id)
+
+        description = "\n".join(
+            [
+                format_substitution_headline(substitution),
+                format_substitution_pitcher(pitcher),
+            ]
+        )
+        embed = discord.Embed(
+            title=f"🔄 {substitution.batting_team} substitution",
+            description=_limit_description(description),
+            color=ORIOLES_ORANGE if substitution.is_orioles else SUBSTITUTION_COLOR,
+        )
+        pitcher_name = pitcher.name if pitcher is not None else "current pitcher"
+        embed.add_field(
+            name=f"Career vs {pitcher_name}",
+            value=_limit_field(format_matchup_history(history, pitcher)),
+            inline=False,
+        )
+        hand = pitcher.throws if pitcher is not None else None
+        embed.add_field(
+            name=f"This season vs {HAND_NAMES.get(hand or '', 'this hand')}",
+            value=_limit_field(format_platoon_split(split, hand)),
+            inline=False,
+        )
+        embed.set_thumbnail(url=headshot_url(batter.player_id))
+        embed.set_footer(text=f"Game PK {substitution.game_pk}")
         embeds.append(embed)
     return embeds
 

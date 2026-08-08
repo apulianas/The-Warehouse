@@ -8,6 +8,38 @@ ORIOLES_TEAM_ID = 110
 ORIOLES_TEAM_NAME = "Baltimore Orioles"
 AMERICAN_LEAGUE_ID = 103
 AL_EAST_DIVISION_ID = 201
+# Statuses that mean first pitch has not happened yet.
+PREGAME_GAME_STATES = frozenset(
+    {
+        "scheduled",
+        "pre-game",
+        "pregame",
+        "warmup",
+        "delayed start",
+    }
+)
+# Statuses that mean the game is behind us.
+FINISHED_GAME_STATES = frozenset(
+    {"final", "game over", "completed early", "completed"}
+)
+# Statuses that mean the game will not be played, at least not now.
+UNPLAYED_GAME_STATES = frozenset(
+    {"postponed", "cancelled", "canceled", "suspended"}
+)
+# `codedGameState` values for the same. Note "T" is deliberately absent: it
+# covers the suspended family but also "Scheduled: COVID-19", so it is
+# ambiguous. The detailed state disambiguates those, and is checked first.
+UNPLAYED_GAME_CODES = frozenset({"D", "C", "U"})
+
+
+def normalize_game_state(status: str | None) -> str:
+    """Reduce a `detailedState` to its bare state.
+
+    MLB appends the reason to several states, so a rain delay arrives as
+    "Delayed: Rain" and a wet postponement as "Postponed: Rain". Dropping the
+    suffix keeps set membership working no matter the weather.
+    """
+    return str(status or "").split(":")[0].strip().casefold()
 
 
 @dataclass(frozen=True)
@@ -17,6 +49,14 @@ class LineupPlayer:
     position: str
     batting_order: int
     headshot_url: str
+    # 0 for a starter, then 1 for the first replacement in that lineup slot, 2
+    # for the next, and so on. The boxscore encodes this as slot * 100 + n.
+    substitution_order: int = 0
+    bat_side: str | None = None
+
+    @property
+    def is_substitute(self) -> bool:
+        return self.substitution_order > 0
 
 
 @dataclass(frozen=True)
@@ -25,6 +65,7 @@ class PitcherInfo:
     name: str
     headshot_url: str | None = None
     status: str = "Probable"
+    throws: str | None = None
 
 
 @dataclass(frozen=True)
@@ -33,6 +74,52 @@ class MatchupAnnotation:
     metric_name: str
     metric_value: float
     plate_appearances: int
+
+
+@dataclass(frozen=True)
+class MatchupHistory:
+    """A batter's complete Statcast history against one pitcher."""
+
+    plate_appearances: int = 0
+    at_bats: int = 0
+    hits: int = 0
+    doubles: int = 0
+    triples: int = 0
+    home_runs: int = 0
+    walks: int = 0
+    strikeouts: int = 0
+    average: float | None = None
+    slugging_percentage: float | None = None
+    woba: float | None = None
+    # Kept as the raw float the CSV reports so the hot/cold threshold compares
+    # against the same denominator it always has.
+    woba_denominator: float = 0.0
+
+    @property
+    def has_history(self) -> bool:
+        return self.plate_appearances > 0
+
+
+@dataclass(frozen=True)
+class Substitution:
+    """A hitter who entered the game in another hitter's lineup slot."""
+
+    game_pk: int
+    slot: int
+    batter: LineupPlayer
+    replaced: LineupPlayer | None
+    pitcher: PitcherInfo | None
+    is_orioles: bool
+    batting_team: str
+    batting_team_id: int | None
+
+    @property
+    def key(self) -> str:
+        """Stable across polls: the same sub never announces twice."""
+        return (
+            f"{self.game_pk}:{self.slot}:"
+            f"{self.batter.substitution_order}:{self.batter.player_id}"
+        )
 
 
 @dataclass(frozen=True)
@@ -53,6 +140,74 @@ class GameInfo:
     opponent_pitcher: PitcherInfo | None
     lineup: tuple[LineupPlayer, ...]
     opponent_lineup: tuple[LineupPlayer, ...]
+    # The batting orders as originally posted. Substitutions change `lineup`
+    # but never these, so they are what announcements are keyed on.
+    starting_lineup: tuple[LineupPlayer, ...] = ()
+    opponent_starting_lineup: tuple[LineupPlayer, ...] = ()
+    # The arm on the mound right now, which is the starter until the first
+    # pitching change. Substitutions are judged against these, not the starters.
+    current_pitcher: PitcherInfo | None = None
+    current_opponent_pitcher: PitcherInfo | None = None
+    substitutions: tuple[Substitution, ...] = ()
+    # `abstractGameState` ("Preview", "Live", "Final") and `codedGameState`.
+    # These are single stable tokens, whereas `status` is the display string
+    # that carries the reason for a delay. Optional so callers that only know
+    # the display status still get sensible answers from the fallbacks below.
+    abstract_status: str = ""
+    coded_status: str = ""
+
+    @property
+    def is_unplayed(self) -> bool:
+        """Postponed, cancelled or suspended, so nothing more happens today.
+
+        The detailed state decides, because it is the only field that separates
+        a suspension from a game still in progress: MLB reports both suspended
+        families ("T" and "U") as abstract "Live". Postponements and
+        cancellations report abstract "Final", hence not deferring to that
+        either. The coded state is only a backstop for a missing detailed one.
+        """
+        if normalize_game_state(self.status) in UNPLAYED_GAME_STATES:
+            return True
+        return self.coded_status.strip().upper()[:1] in UNPLAYED_GAME_CODES
+
+    @property
+    def has_started(self) -> bool:
+        """True once first pitch has happened, and still true afterwards.
+
+        Before first pitch a changed batting order is a corrected lineup card,
+        which is worth reposting in full. After it, a change is a substitution.
+        """
+        if self.is_unplayed:
+            return False
+        # Checked before the abstract state because MLB calls warmup "Live"
+        # even though the game has not begun.
+        if normalize_game_state(self.status) in PREGAME_GAME_STATES:
+            return False
+        abstract = self.abstract_status.strip().casefold()
+        if abstract:
+            return abstract in {"live", "final"}
+        return True
+
+    @property
+    def is_final(self) -> bool:
+        """True once the game is over, or has been called off."""
+        if self.is_unplayed:
+            return True
+        if normalize_game_state(self.status) in PREGAME_GAME_STATES:
+            return False
+        abstract = self.abstract_status.strip().casefold()
+        if abstract:
+            return abstract == "final"
+        return normalize_game_state(self.status) in FINISHED_GAME_STATES
+
+    @property
+    def is_in_progress(self) -> bool:
+        """Being played right now, which is when updates are worth chasing.
+
+        A rain delay after first pitch still counts: MLB keeps the game "Live",
+        play can resume at any moment, and substitutions often follow one.
+        """
+        return self.has_started and not self.is_final
 
 
 @dataclass(frozen=True)
