@@ -160,8 +160,11 @@ def substitution_embeds(
                 format_substitution_pitcher(pitcher, label=mound_label),
             ]
         )
+        # A runner is the one substitution that is not about to hit, so the
+        # icon says at a glance which kind of card this is.
+        icon = "🏃" if substitution.is_pinch_runner else "🔄"
         embed = discord.Embed(
-            title=f"🔄 {substitution.batting_team} substitution",
+            title=f"{icon} {substitution.batting_team} substitution",
             description=_limit_description(description),
             color=ORIOLES_ORANGE if substitution.is_orioles else SUBSTITUTION_COLOR,
         )
