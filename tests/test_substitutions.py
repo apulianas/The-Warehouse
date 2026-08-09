@@ -8,18 +8,33 @@ from orioles_bot.embeds import substitution_embeds
 from orioles_bot.formatting import (
     format_matchup_history,
     format_platoon_split,
+    format_running_profile,
     format_substitution_headline,
     format_substitution_pitcher,
 )
 from orioles_bot.matchups import MatchupService, calculate_matchup_history
-from orioles_bot.mlb import headshot_url, parse_game, parse_handedness, parse_platoon_splits
+from orioles_bot.mlb import (
+    MlbApiError,
+    _entry_position,
+    headshot_url,
+    parse_game,
+    parse_handedness,
+    parse_platoon_splits,
+    parse_running_stats,
+)
 from orioles_bot.models import (
     HittingSplit,
     LineupPlayer,
     MatchupHistory,
     PitcherInfo,
+    RunningProfile,
+    SUBSTITUTION_ROLE_FIELDER,
+    SUBSTITUTION_ROLE_HITTER,
+    SUBSTITUTION_ROLE_RUNNER,
+    SUBSTITUTION_ROLE_UNKNOWN,
     Substitution,
 )
+from orioles_bot.running import SprintSpeedService
 
 
 ORIOLES_ID = 110
@@ -506,3 +521,310 @@ def test_substitutions_before_first_pitch_do_not_post_a_card(tmp_path) -> None:
     asyncio.run(run())
 
     assert recorder.posts == []
+
+
+def _lineup_player_with_entry(entry: str | None) -> LineupPlayer:
+    return LineupPlayer(
+        1900,
+        "Sub Oriole",
+        "LF",
+        9,
+        headshot_url(1900),
+        1,
+        bat_side="R",
+        entry_position=entry,
+    )
+
+
+def _sub(batter: LineupPlayer, pitcher: PitcherInfo | None = None) -> Substitution:
+    return Substitution(
+        game_pk=777,
+        slot=9,
+        batter=batter,
+        replaced=LineupPlayer(1009, "Oriole 9", "C", 9, headshot_url(1009)),
+        pitcher=pitcher,
+        is_orioles=True,
+        batting_team="Baltimore Orioles",
+        batting_team_id=ORIOLES_ID,
+    )
+
+
+_PITCHER = PitcherInfo(player_id=9, name="Ace Reliever", throws="L")
+
+
+def test_entry_position_distinguishes_pinch_runner_from_pinch_hitter() -> None:
+    """MLB records the entry role as the first position a player occupies."""
+    assert _sub(_lineup_player_with_entry("PR")).role == SUBSTITUTION_ROLE_RUNNER
+    assert _sub(_lineup_player_with_entry("PH")).role == SUBSTITUTION_ROLE_HITTER
+    assert _sub(_lineup_player_with_entry("1B")).role == SUBSTITUTION_ROLE_FIELDER
+    assert _sub(_lineup_player_with_entry("PR")).is_pinch_runner
+    assert not _sub(_lineup_player_with_entry("PH")).is_pinch_runner
+
+
+def test_entry_position_without_a_recorded_position_stays_generic() -> None:
+    """Guessing a role would state something the boxscore has not said."""
+    unknown = _sub(_lineup_player_with_entry(None))
+
+    assert unknown.role == SUBSTITUTION_ROLE_UNKNOWN
+    assert not unknown.is_pinch_runner
+    assert not unknown.is_defensive_substitution
+
+
+def test_parse_entry_position_reads_the_first_of_all_positions() -> None:
+    """A pinch runner who later takes the field still entered as a runner."""
+    player = {
+        "person": {"id": 5, "fullName": "Speedy Sub"},
+        "position": {"abbreviation": "LF"},
+        "battingOrder": "501",
+        "allPositions": [{"abbreviation": "PR"}, {"abbreviation": "LF"}],
+    }
+
+    assert _entry_position(player) == "PR"
+
+
+def test_parse_entry_position_tolerates_missing_or_malformed_positions() -> None:
+    assert _entry_position({"person": {"id": 5}}) is None
+    assert _entry_position({"allPositions": []}) is None
+    assert _entry_position({"allPositions": "PR"}) is None
+    assert _entry_position({"allPositions": [{}]}) is None
+    assert _entry_position(None) is None
+
+
+def test_pinch_runner_card_shows_baserunning_not_a_matchup() -> None:
+    """The bug this fixes: a pinch runner was given a hitting card."""
+    substitution = _sub(_lineup_player_with_entry("PR"), pitcher=_PITCHER)
+    profile = RunningProfile(
+        stolen_bases=5,
+        caught_stealing=4,
+        stolen_base_percentage=0.556,
+        sprint_speed=28.5,
+        bolts=3,
+    )
+
+    embed = substitution_embeds([substitution], {}, {}, {1900: profile})[0]
+
+    assert [field.name for field in embed.fields] == ["Baserunning"]
+    assert (embed.title or "").startswith("🏃")
+    value = embed.fields[0].value or ""
+    assert "5-for-9 stealing" in value
+    assert "28.5 ft/s" in value
+    assert "3 bolts" in value
+    assert "pinch runner" in (embed.description or "")
+    # He is not hitting, so the pitcher is context rather than a matchup.
+    assert "On the mound" in (embed.description or "")
+
+
+def test_pinch_hitter_and_defensive_sub_keep_the_hitting_card() -> None:
+    for entry in ("PH", "1B"):
+        substitution = _sub(_lineup_player_with_entry(entry), pitcher=_PITCHER)
+
+        embed = substitution_embeds([substitution], {}, {}, {})[0]
+
+        assert [field.name for field in embed.fields] == [
+            "Career vs Ace Reliever",
+            "This season vs LHP",
+        ]
+        assert (embed.title or "").startswith("🔄")
+        assert "Facing" in (embed.description or "")
+
+
+def test_defensive_substitution_headline_names_the_position() -> None:
+    headline = format_substitution_headline(_sub(_lineup_player_with_entry("1B")))
+
+    assert "defensive substitution at LF" in headline
+
+
+def test_pinch_runner_headline_omits_bat_side() -> None:
+    """Which side he hits from is noise for a player who is not batting."""
+    headline = format_substitution_headline(_sub(_lineup_player_with_entry("PR")))
+
+    assert "(R)" not in headline
+    assert "(R)" in format_substitution_headline(_sub(_lineup_player_with_entry("PH")))
+
+
+def test_running_profile_renders_each_half_independently() -> None:
+    """Statcast rates only frequent runners, so speed can be missing alone."""
+    steals_only = RunningProfile(stolen_bases=3, caught_stealing=1)
+
+    assert format_running_profile(steals_only) == "3-for-4 stealing"
+    assert "29.1 ft/s sprint speed" in format_running_profile(
+        RunningProfile(sprint_speed=29.1)
+    )
+
+
+def test_running_profile_separates_no_attempts_from_no_data() -> None:
+    """A callup with no stat line is not the same as one who has not run."""
+    no_attempts = RunningProfile(stolen_bases=0, caught_stealing=0, sprint_speed=27.0)
+
+    assert "No stolen base attempts this season" in format_running_profile(no_attempts)
+    assert format_running_profile(RunningProfile()) == (
+        "Baserunning data is unavailable right now."
+    )
+    assert format_running_profile(None) == "Baserunning data is unavailable right now."
+
+
+def test_parse_running_stats_reads_steals_from_the_hitting_group() -> None:
+    """MLB returns nothing for group=running, so steals come from hitting."""
+    data = {
+        "stats": [
+            {
+                "splits": [
+                    {
+                        "stat": {
+                            "stolenBases": 12,
+                            "caughtStealing": 3,
+                            "stolenBasePercentage": ".800",
+                        }
+                    }
+                ]
+            }
+        ]
+    }
+
+    profile = parse_running_stats(data)
+
+    assert profile.stolen_bases == 12
+    assert profile.caught_stealing == 3
+    assert profile.attempts == 15
+    assert profile.has_steal_line
+
+
+def test_parse_running_stats_without_a_stat_line_is_empty_not_zero() -> None:
+    """A September callup returns no groups at all, which is not a zero."""
+    assert parse_running_stats({"stats": []}).is_empty
+    assert not parse_running_stats({"stats": []}).has_steal_line
+    assert parse_running_stats({}).is_empty
+
+
+def test_sprint_speed_leaderboard_is_fetched_once_for_all_runners() -> None:
+    """It is one league wide document, so per player fetches would be waste."""
+    calls: list[int] = []
+
+    def fetcher(season: int) -> list[dict[str, str]]:
+        calls.append(season)
+        return [
+            {
+                "player_id": "696030",
+                "sprint_speed": "28.5",
+                "bolts": "3",
+                "hp_to_1b": "4.27",
+            },
+            {
+                "player_id": "681047",
+                "sprint_speed": "27.1",
+                "bolts": "0",
+                "hp_to_1b": "",
+            },
+        ]
+
+    service = SprintSpeedService(fetcher)
+
+    async def run() -> tuple[object, object, object]:
+        return (
+            await service.for_player(696030, 2025),
+            await service.for_player(681047, 2025),
+            await service.for_player(1, 2025),
+        )
+
+    first, second, missing = asyncio.run(run())
+
+    assert calls == [2025]
+    assert first == {"sprint_speed": 28.5, "bolts": 3, "home_to_first": 4.27}
+    assert second == {"sprint_speed": 27.1, "bolts": 0, "home_to_first": None}
+    # Statcast simply does not rate a runner with too few tracked runs.
+    assert missing is None
+
+
+def test_sprint_speed_failure_degrades_instead_of_raising() -> None:
+    """Speed is a nice to have; losing it must not drop the whole card."""
+
+    def fetcher(season: int) -> list[dict[str, str]]:
+        raise RuntimeError("savant is down")
+
+    service = SprintSpeedService(fetcher)
+
+    assert asyncio.run(service.for_player(696030, 2025)) is None
+
+
+def test_parse_entry_position_translates_numeric_position_codes() -> None:
+    """MLB position codes are numeric, so PH/PR never match them directly."""
+    assert _entry_position({"allPositions": [{"code": "12"}]}) == "PR"
+    assert _entry_position({"allPositions": [{"code": "11"}]}) == "PH"
+    # A fielding code is not a pinch role, so it must not masquerade as one.
+    assert _entry_position({"allPositions": [{"code": "4"}]}) is None
+
+
+def test_empty_sprint_speed_leaderboard_is_not_cached() -> None:
+    """Statcast publishes nothing early in a season; that must be retried."""
+    responses: list[list[dict[str, str]]] = [
+        [],
+        [{"player_id": "1900", "sprint_speed": "28.0", "bolts": "1"}],
+    ]
+    calls: list[int] = []
+
+    def fetcher(season: int) -> list[dict[str, str]]:
+        calls.append(season)
+        return responses[len(calls) - 1]
+
+    service = SprintSpeedService(fetcher)
+
+    async def run() -> tuple[object, object]:
+        return (
+            await service.for_player(1900, 2026),
+            await service.for_player(1900, 2026),
+        )
+
+    first, second = asyncio.run(run())
+
+    assert first is None
+    assert second == {"sprint_speed": 28.0, "bolts": 1, "home_to_first": None}
+    assert calls == [2026, 2026]
+
+
+def test_running_profile_says_so_when_only_the_steal_lookup_failed() -> None:
+    """Omitting the steal half would read as "he has never run"."""
+    speed_only = RunningProfile(sprint_speed=29.3, bolts=5)
+
+    rendered = format_running_profile(speed_only)
+
+    assert "Stolen base record unavailable" in rendered
+    assert "29.3 ft/s" in rendered
+    assert "No stolen base attempts" not in rendered
+
+
+def test_running_profile_keeps_speed_when_the_steal_lookup_fails(tmp_path) -> None:
+    """One source failing should not suppress the other."""
+    bot = _bot(tmp_path)
+
+    class _FailingMlb:
+        async def fetch_running_stats(self, player_id: int, season: int):
+            raise MlbApiError("stats api is down")
+
+    bot.mlb = _FailingMlb()
+    bot.sprint_speed = SprintSpeedService(
+        lambda season: [{"player_id": "1900", "sprint_speed": "29.3", "bolts": "5"}]
+    )
+
+    profile = asyncio.run(bot._running_profile(1900, "Sub Oriole", 2025))
+
+    assert profile is not None
+    assert profile.sprint_speed == 29.3
+    assert not profile.has_steal_line
+    assert "29.3 ft/s" in format_running_profile(profile)
+
+
+def test_running_profile_is_none_when_both_sources_fail(tmp_path) -> None:
+    bot = _bot(tmp_path)
+
+    class _FailingMlb:
+        async def fetch_running_stats(self, player_id: int, season: int):
+            raise MlbApiError("stats api is down")
+
+    bot.mlb = _FailingMlb()
+    bot.sprint_speed = SprintSpeedService(_raise_savant)
+
+    assert asyncio.run(bot._running_profile(1900, "Sub Oriole", 2025)) is None
+
+
+def _raise_savant(season: int) -> list[dict[str, str]]:
+    raise RuntimeError("savant is down")
