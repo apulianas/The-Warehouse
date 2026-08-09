@@ -42,8 +42,11 @@ A Dockerized Python 3.12 Discord bot that posts Baltimore Orioles lineups, roste
   Postponed and cancelled games are treated as idle.
 - Automatic lineup posts wait until both teams' batting orders are available.
 - The full lineup is posted once. Later changes arrive as a compact substitution
-  card for the new hitter, with his history against the pitcher on the mound and
-  his splits versus that hand, instead of reposting the whole batting order.
+  card instead of reposting the whole batting order.
+- Substitution cards match the role the player entered in. A pinch hitter or
+  defensive replacement gets his history against the pitcher on the mound and
+  his splits versus that hand; a pinch runner gets his stolen base record and
+  Statcast sprint speed, since he is not coming up to bat.
 - Duplicate announcement prevention across restarts using `/data/state.json`.
 - Graceful empty states when there is no game, lineup, transaction, standings, or
   schedule data.
