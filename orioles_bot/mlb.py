@@ -25,6 +25,7 @@ from .models import (
     PitchingGame,
     PitchingSplit,
     PlayerRef,
+    RunningProfile,
     ScheduleWindow,
     StatsWindow,
     Substitution,
@@ -256,6 +257,23 @@ class MlbClient:
             },
         )
         return parse_platoon_splits(data)
+
+    async def fetch_running_stats(self, player_id: int, season: int) -> RunningProfile:
+        """This season's stolen base record.
+
+        MLB files steals under the hitting group rather than a running one,
+        which returns nothing for a position player.
+        """
+        data = await self._get_json(
+            f"/people/{player_id}/stats",
+            {
+                "stats": "season",
+                "group": "hitting",
+                "season": season,
+                "sportId": 1,
+            },
+        )
+        return parse_running_stats(data)
 
     async def fetch_player_stats(
         self, player_id: int, window: StatsWindow
@@ -927,7 +945,40 @@ def _lineup_player(
         batting_order=slot,
         headshot_url=headshot_url(player_id),
         substitution_order=sequence,
+        entry_position=_entry_position(player),
     )
+
+
+POSITION_CODE_ABBREVIATIONS = {"11": "PH", "12": "PR"}
+
+
+def _entry_position(player: Any) -> str | None:
+    """The position a player first appeared at.
+
+    `allPositions` lists positions in the order the player occupied them, so
+    the first entry is how he entered the game: "PH" pinch hitting, "PR" pinch
+    running, or a fielding position for a defensive replacement.
+
+    Returns None when no position is recorded, so callers can stay generic
+    rather than guessing a role MLB has not published.
+    """
+    if not isinstance(player, dict):
+        return None
+    positions = player.get("allPositions")
+    if not isinstance(positions, list):
+        return None
+    for entry in positions:
+        if not isinstance(entry, dict):
+            continue
+        abbreviation = entry.get("abbreviation")
+        if abbreviation:
+            return str(abbreviation).strip().upper()
+        # `code` is numeric, so it has to be translated rather than compared
+        # against the PH/PR abbreviations directly.
+        code = str(entry.get("code") or "").strip()
+        if code in POSITION_CODE_ABBREVIATIONS:
+            return POSITION_CODE_ABBREVIATIONS[code]
+    return None
 
 
 def _batting_order_code(player: Any) -> tuple[int | None, int]:
@@ -1304,6 +1355,32 @@ def parse_hitting_split(stat: dict[str, Any]) -> HittingSplit:
         slugging_percentage=_stat_float(stat, "slg"),
         ops=_stat_float(stat, "ops"),
     )
+
+
+def parse_running_stats(data: dict[str, Any]) -> RunningProfile:
+    """Pull the stolen base record out of a season hitting response."""
+    groups = data.get("stats")
+    if not isinstance(groups, list):
+        return RunningProfile()
+
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        entries = group.get("splits")
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            stat = entry.get("stat")
+            if not isinstance(stat, dict):
+                continue
+            return RunningProfile(
+                stolen_bases=_stat_int(stat, "stolenBases"),
+                caught_stealing=_stat_int(stat, "caughtStealing"),
+                stolen_base_percentage=_stat_float(stat, "stolenBasePercentage"),
+            )
+    return RunningProfile()
 
 
 def parse_pitching_split(stat: dict[str, Any]) -> PitchingSplit:

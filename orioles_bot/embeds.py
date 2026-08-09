@@ -34,6 +34,7 @@ from .formatting import (
     format_stats_window,
     format_substitution_headline,
     format_substitution_pitcher,
+    format_running_profile,
     format_transaction,
     format_wild_card,
 )
@@ -56,6 +57,7 @@ from .models import (
     PitchingSplit,
     PitchingGame,
     PlayerRef,
+    RunningProfile,
     ScheduleWindow,
     StatsWindow,
     Substitution,
@@ -137,25 +139,25 @@ def substitution_embeds(
     substitutions: Sequence[Substitution],
     histories: Mapping[tuple[int, int], MatchupHistory] | None = None,
     platoon_splits: Mapping[int, HittingSplit] | None = None,
+    running_profiles: Mapping[int, RunningProfile] | None = None,
 ) -> list[discord.Embed]:
-    """One compact card per hitter who entered the game.
+    """One compact card per player who entered the game.
 
-    Deliberately narrow: a substitution is worth a note about the new bat, not
-    a repost of the whole batting order.
+    Deliberately narrow: a substitution is worth a note about the new player,
+    not a repost of the whole batting order. Pinch runners get a baserunning
+    card since they are not coming up to hit.
     """
     embeds: list[discord.Embed] = []
     for substitution in substitutions:
         batter = substitution.batter
         pitcher = substitution.pitcher
-        history = None
-        if histories is not None and pitcher is not None and pitcher.player_id is not None:
-            history = histories.get((batter.player_id, pitcher.player_id))
-        split = (platoon_splits or {}).get(batter.player_id)
 
+        # A runner cares about who is holding him on, not who he is hitting off.
+        mound_label = "On the mound" if substitution.is_pinch_runner else "Facing"
         description = "\n".join(
             [
                 format_substitution_headline(substitution),
-                format_substitution_pitcher(pitcher),
+                format_substitution_pitcher(pitcher, label=mound_label),
             ]
         )
         embed = discord.Embed(
@@ -163,18 +165,37 @@ def substitution_embeds(
             description=_limit_description(description),
             color=ORIOLES_ORANGE if substitution.is_orioles else SUBSTITUTION_COLOR,
         )
-        pitcher_name = pitcher.name if pitcher is not None else "current pitcher"
-        embed.add_field(
-            name=f"Career vs {pitcher_name}",
-            value=_limit_field(format_matchup_history(history, pitcher)),
-            inline=False,
-        )
-        hand = pitcher.throws if pitcher is not None else None
-        embed.add_field(
-            name=f"This season vs {HAND_NAMES.get(hand or '', 'this hand')}",
-            value=_limit_field(format_platoon_split(split, hand)),
-            inline=False,
-        )
+
+        if substitution.is_pinch_runner:
+            profile = (running_profiles or {}).get(batter.player_id)
+            embed.add_field(
+                name="Baserunning",
+                value=_limit_field(format_running_profile(profile)),
+                inline=False,
+            )
+        else:
+            history = None
+            if (
+                histories is not None
+                and pitcher is not None
+                and pitcher.player_id is not None
+            ):
+                history = histories.get((batter.player_id, pitcher.player_id))
+            split = (platoon_splits or {}).get(batter.player_id)
+
+            pitcher_name = pitcher.name if pitcher is not None else "current pitcher"
+            embed.add_field(
+                name=f"Career vs {pitcher_name}",
+                value=_limit_field(format_matchup_history(history, pitcher)),
+                inline=False,
+            )
+            hand = pitcher.throws if pitcher is not None else None
+            embed.add_field(
+                name=f"This season vs {HAND_NAMES.get(hand or '', 'this hand')}",
+                value=_limit_field(format_platoon_split(split, hand)),
+                inline=False,
+            )
+
         embed.set_thumbnail(url=headshot_url(batter.player_id))
         embed.set_footer(text=f"Game PK {substitution.game_pk}")
         embeds.append(embed)

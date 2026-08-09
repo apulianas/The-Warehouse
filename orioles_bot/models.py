@@ -30,6 +30,14 @@ UNPLAYED_GAME_STATES = frozenset(
 # covers the suspended family but also "Scheduled: COVID-19", so it is
 # ambiguous. The detailed state disambiguates those, and is checked first.
 UNPLAYED_GAME_CODES = frozenset({"D", "C", "U"})
+# MLB records the role a substitute entered in as the first position it lists
+# for him, using these two pseudo-positions.
+PINCH_HITTER_POSITION = "PH"
+PINCH_RUNNER_POSITION = "PR"
+SUBSTITUTION_ROLE_HITTER = "pinch hitter"
+SUBSTITUTION_ROLE_RUNNER = "pinch runner"
+SUBSTITUTION_ROLE_FIELDER = "defensive substitution"
+SUBSTITUTION_ROLE_UNKNOWN = "substitution"
 
 
 def normalize_game_state(status: str | None) -> str:
@@ -53,6 +61,10 @@ class LineupPlayer:
     # for the next, and so on. The boxscore encodes this as slot * 100 + n.
     substitution_order: int = 0
     bat_side: str | None = None
+    # The position the player first appeared at, which is how MLB records the
+    # role they entered in: "PH" for a pinch hitter, "PR" for a pinch runner,
+    # or a fielding position for a defensive replacement.
+    entry_position: str | None = None
 
     @property
     def is_substitute(self) -> bool:
@@ -101,8 +113,53 @@ class MatchupHistory:
 
 
 @dataclass(frozen=True)
+class RunningProfile:
+    """What a pinch runner was brought in to do.
+
+    Stolen bases come from the season hitting stats, sprint speed from
+    Statcast. Either source can be missing on its own: a September callup may
+    have no steals yet, and Statcast only rates players with enough tracked
+    runs, so both halves render independently.
+    """
+
+    stolen_bases: int | None = None
+    caught_stealing: int | None = None
+    stolen_base_percentage: float | None = None
+    # Feet per second on a player's fastest competitive runs, and the number of
+    # those runs at 30 ft/s or better, which Statcast calls a "bolt".
+    sprint_speed: float | None = None
+    bolts: int | None = None
+    home_to_first: float | None = None
+
+    @property
+    def attempts(self) -> int:
+        return (self.stolen_bases or 0) + (self.caught_stealing or 0)
+
+    @property
+    def has_steal_line(self) -> bool:
+        """True when MLB actually returned a stat line.
+
+        A callup with no season stats is different from a player who has
+        simply not run yet, and only the second is safe to state as fact.
+        """
+        return self.stolen_bases is not None or self.caught_stealing is not None
+
+    @property
+    def has_steal_record(self) -> bool:
+        return self.attempts > 0
+
+    @property
+    def has_speed(self) -> bool:
+        return self.sprint_speed is not None
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.has_steal_line and not self.has_speed
+
+
+@dataclass(frozen=True)
 class Substitution:
-    """A hitter who entered the game in another hitter's lineup slot."""
+    """A player who entered the game in another player's lineup slot."""
 
     game_pk: int
     slot: int
@@ -112,6 +169,32 @@ class Substitution:
     is_orioles: bool
     batting_team: str
     batting_team_id: int | None
+
+    @property
+    def role(self) -> str:
+        """How the player entered: pinch hitting, pinch running, or fielding.
+
+        A pinch runner is not about to bat, so the card shows what he was
+        brought in to do rather than how he hits the pitcher. When the
+        boxscore has not recorded a position yet the role stays generic, since
+        guessing "defensive substitution" would state something unknown.
+        """
+        entry = (self.batter.entry_position or "").strip().upper()
+        if not entry:
+            return SUBSTITUTION_ROLE_UNKNOWN
+        if entry == PINCH_RUNNER_POSITION:
+            return SUBSTITUTION_ROLE_RUNNER
+        if entry == PINCH_HITTER_POSITION:
+            return SUBSTITUTION_ROLE_HITTER
+        return SUBSTITUTION_ROLE_FIELDER
+
+    @property
+    def is_pinch_runner(self) -> bool:
+        return self.role == SUBSTITUTION_ROLE_RUNNER
+
+    @property
+    def is_defensive_substitution(self) -> bool:
+        return self.role == SUBSTITUTION_ROLE_FIELDER
 
     @property
     def key(self) -> str:
