@@ -46,11 +46,13 @@ from .models import (
     HittingSplit,
     MatchupHistory,
     NextGame,
+    RunningProfile,
     Substitution,
     TransactionInfo,
     WildCardStandings,
 )
 from .player_stats import PlayerStatsService
+from .running import SprintSpeedService
 from .state import AnnouncementState, channel_key
 
 
@@ -97,6 +99,7 @@ class OriolesBot(commands.Bot):
         self.session: aiohttp.ClientSession | None = None
         self.mlb: MlbClient | None = None
         self.matchups = MatchupService(config.matchup_min_pa)
+        self.sprint_speed = SprintSpeedService()
         self.player_stats = PlayerStatsService()
         self.standings_cache: AsyncTtlCache[int, StandingsPayload] = AsyncTtlCache(
             STANDINGS_TTL_SECONDS
@@ -296,10 +299,12 @@ class OriolesBot(commands.Bot):
         resolved = await self._resolve_substitutions(
             [substitution for substitution, _, _ in pending]
         )
-        histories, splits = await self._substitution_stats(resolved, target_date)
+        histories, splits, profiles = await self._substitution_stats(
+            resolved, target_date
+        )
 
         for substitution, (_, key, waiting) in zip(resolved, pending, strict=True):
-            embeds = substitution_embeds([substitution], histories, splits)
+            embeds = substitution_embeds([substitution], histories, splits, profiles)
             for target in waiting:
                 await self._announce(
                     target,
@@ -346,22 +351,33 @@ class OriolesBot(commands.Bot):
     async def _substitution_stats(
         self, substitutions: list[Substitution], target_date: date
     ) -> tuple[
-        dict[tuple[int, int], MatchupHistory], dict[int, HittingSplit]
+        dict[tuple[int, int], MatchupHistory],
+        dict[int, HittingSplit],
+        dict[int, RunningProfile],
     ]:
-        """Head-to-head history and platoon splits for the incoming hitters."""
+        """Stats for the incoming players, fetched per role.
+
+        A pinch runner's card never shows matchup history, so looking it up
+        would burn API calls on numbers nobody sees. The reverse holds for
+        hitters and baserunning.
+        """
+        hitters = [sub for sub in substitutions if not sub.is_pinch_runner]
+        runners = [sub for sub in substitutions if sub.is_pinch_runner]
+
         pairs = [
             (substitution.batter.player_id, substitution.pitcher.player_id)
-            for substitution in substitutions
+            for substitution in hitters
             if substitution.pitcher is not None
             and substitution.pitcher.player_id is not None
         ]
         histories = await self.matchups.history_many(pairs)
 
         splits: dict[int, HittingSplit] = {}
+        profiles: dict[int, RunningProfile] = {}
         if self.mlb is None:
-            return histories, splits
+            return histories, splits, profiles
 
-        for substitution in substitutions:
+        for substitution in hitters:
             pitcher = substitution.pitcher
             hand = pitcher.throws if pitcher is not None else None
             code = PLATOON_SPLIT_CODES.get(hand or "")
@@ -386,7 +402,44 @@ class OriolesBot(commands.Bot):
             splits[substitution.batter.player_id] = (
                 split if split is not None else HittingSplit()
             )
-        return histories, splits
+
+        for substitution in runners:
+            profile = await self._running_profile(
+                substitution.batter.player_id,
+                substitution.batter.name,
+                target_date.year,
+            )
+            if profile is not None:
+                profiles[substitution.batter.player_id] = profile
+
+        return histories, splits, profiles
+
+    async def _running_profile(
+        self, player_id: int, name: str, season: int
+    ) -> RunningProfile | None:
+        """Steals from MLB plus Statcast speed, each optional on its own.
+
+        Statcast only rates runners with enough tracked competitive runs, so a
+        callup can have a real steal record and no speed number, or vice versa.
+        Neither source failing should suppress the other.
+        """
+        if self.mlb is None:
+            return None
+        try:
+            profile = await self.mlb.fetch_running_stats(player_id, season)
+        except MlbApiError as exc:
+            LOGGER.info("Stolen base record unavailable for %s: %s", name, exc)
+            profile = RunningProfile()
+
+        speed = await self.sprint_speed.for_player(player_id, season)
+        if speed is not None:
+            profile = replace(
+                profile,
+                sprint_speed=speed.get("sprint_speed"),
+                bolts=speed.get("bolts"),
+                home_to_first=speed.get("home_to_first"),
+            )
+        return profile if not profile.is_empty else None
 
     @poll_updates.before_loop
     async def before_poll_updates(self) -> None:
