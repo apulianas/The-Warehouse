@@ -18,6 +18,7 @@ from .models import (
     PitchingGame,
     PitchingSplit,
     PlayerRef,
+    RunningProfile,
     ScheduleWindow,
     StatsWindow,
     Substitution,
@@ -146,10 +147,11 @@ BAT_SIDE_NAMES = {"L": "L", "R": "R", "S": "S"}
 
 
 def format_substitution_headline(substitution: Substitution) -> str:
-    """One line naming who came in, for whom, and in which slot."""
+    """One line naming who came in, for whom, and in which role."""
     batter = substitution.batter
     name = f"[{batter.name}]({savant_player_url(batter.player_id)})"
-    if batter.bat_side:
+    # A pinch runner is not about to hit, so which side he bats from is noise.
+    if batter.bat_side and not substitution.is_pinch_runner:
         name = f"{name} ({BAT_SIDE_NAMES.get(batter.bat_side, batter.bat_side)})"
 
     if substitution.replaced is not None:
@@ -160,19 +162,62 @@ def format_substitution_headline(substitution: Substitution) -> str:
         action = f"{name} replaces {replaced}"
     else:
         action = f"{name} enters"
-    return f"{action} — batting {_ordinal(substitution.slot)}, {batter.position}"
+    role = substitution.role
+    # A defensive replacement is defined by where he plays, so name the spot.
+    if substitution.is_defensive_substitution and batter.position:
+        role = f"{role} at {batter.position}"
+    return f"{action} — {role}, batting {_ordinal(substitution.slot)}"
 
 
-def format_substitution_pitcher(pitcher: PitcherInfo | None) -> str:
+def format_running_profile(profile: RunningProfile | None) -> str:
+    """A pinch runner's stolen base record and Statcast speed.
+
+    Either half can be missing on its own, so they are assembled separately
+    rather than assuming a runner with no steals also has no speed rating.
+    """
+    if profile is None or profile.is_empty:
+        return "Baserunning data is unavailable right now."
+
+    parts: list[str] = []
+    if profile.has_steal_record:
+        rate = (
+            f" ({format_rate(profile.stolen_base_percentage)})"
+            if profile.stolen_base_percentage is not None
+            else ""
+        )
+        parts.append(
+            f"{profile.stolen_bases}-for-{profile.attempts} stealing{rate}"
+        )
+    elif profile.has_steal_line:
+        parts.append("No stolen base attempts this season")
+    else:
+        # Speed came through but the steal lookup did not, so say so rather
+        # than let the omission read as "he has never run".
+        parts.append("Stolen base record unavailable")
+
+    if profile.sprint_speed is not None:
+        speed = f"{profile.sprint_speed:.1f} ft/s sprint speed"
+        if profile.bolts:
+            speed = f"{speed}, {profile.bolts} bolts"
+        parts.append(speed)
+    if profile.home_to_first is not None:
+        parts.append(f"{profile.home_to_first:.2f}s home to first")
+
+    return " • ".join(parts)
+
+
+def format_substitution_pitcher(
+    pitcher: PitcherInfo | None, *, label: str = "Facing"
+) -> str:
     if pitcher is None:
-        return "Facing: pitcher not announced"
+        return f"{label}: pitcher not announced"
     name = (
         f"[{pitcher.name}]({savant_player_url(pitcher.player_id)})"
         if pitcher.player_id is not None
         else pitcher.name
     )
     hand = f" ({HAND_NAMES[pitcher.throws]})" if pitcher.throws in HAND_NAMES else ""
-    return f"Facing: {name}{hand}"
+    return f"{label}: {name}{hand}"
 
 
 def format_matchup_history(
