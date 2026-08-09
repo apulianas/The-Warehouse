@@ -604,6 +604,7 @@ def test_pinch_runner_card_shows_baserunning_not_a_matchup() -> None:
     embed = substitution_embeds([substitution], {}, {}, {1900: profile})[0]
 
     assert [field.name for field in embed.fields] == ["Baserunning"]
+    assert (embed.title or "").startswith("🏃")
     value = embed.fields[0].value or ""
     assert "5-for-9 stealing" in value
     assert "28.5 ft/s" in value
@@ -623,6 +624,7 @@ def test_pinch_hitter_and_defensive_sub_keep_the_hitting_card() -> None:
             "Career vs Ace Reliever",
             "This season vs LHP",
         ]
+        assert (embed.title or "").startswith("🔄")
         assert "Facing" in (embed.description or "")
 
 
