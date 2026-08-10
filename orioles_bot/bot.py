@@ -141,6 +141,20 @@ class OriolesBot(commands.Bot):
                     + [webhook_label(url) for url in self.config.discord_webhook_urls]
                 ),
             )
+            if self.config.has_substitution_targets:
+                LOGGER.info(
+                    "Substitution cards go to %s",
+                    ", ".join(
+                        [
+                            f"channel {item}"
+                            for item in self.config.substitution_channel_ids
+                        ]
+                        + [
+                            webhook_label(url)
+                            for url in self.config.substitution_webhook_urls
+                        ]
+                    ),
+                )
 
     async def close(self) -> None:
         if self.poll_updates.is_running():
@@ -157,8 +171,18 @@ class OriolesBot(commands.Bot):
         if not self.config.has_announcement_targets or self.mlb is None:
             return
 
-        targets = await self._announcement_targets()
-        if not targets:
+        targets = await self._announcement_targets(
+            self.config.discord_channel_ids, self.config.discord_webhook_urls
+        )
+        substitution_targets = (
+            await self._announcement_targets(
+                self.config.substitution_channel_ids,
+                self.config.substitution_webhook_urls,
+            )
+            if self.config.has_substitution_targets
+            else targets
+        )
+        if not targets and not substitution_targets:
             return
 
         target_date = today_in_zone(self.config.time_zone)
@@ -173,7 +197,9 @@ class OriolesBot(commands.Bot):
             if not game.lineup or not game.opponent_lineup:
                 continue
             await self._announce_lineup(game, targets, target_date)
-            await self._announce_substitutions(game, targets, target_date)
+            await self._announce_substitutions(
+                game, substitution_targets, target_date
+            )
 
         for transaction in transactions:
             key = transaction_announcement_key(transaction)
@@ -222,9 +248,11 @@ class OriolesBot(commands.Bot):
         for target in pending:
             await self._announce(target, key, "Orioles lineup update", embeds)
 
-    async def _announcement_targets(self) -> list[_AnnouncementTarget]:
+    async def _announcement_targets(
+        self, channel_ids: Sequence[int], webhook_urls: Sequence[str]
+    ) -> list[_AnnouncementTarget]:
         targets: list[_AnnouncementTarget] = []
-        for channel_id in self.config.discord_channel_ids:
+        for channel_id in channel_ids:
             channel = self.get_channel(channel_id)
             if channel is None:
                 try:
@@ -239,7 +267,7 @@ class OriolesBot(commands.Bot):
                 _AnnouncementTarget(str(channel_id), f"channel {channel_id}", channel)
             )
 
-        for url in self.config.discord_webhook_urls:
+        for url in webhook_urls:
             if self.session is None:
                 break
             try:
