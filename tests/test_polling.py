@@ -6,11 +6,13 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from orioles_bot.bot import poll_interval_for
+from dataclasses import replace
+
+from orioles_bot.bot import OriolesBot, poll_interval_for
 from orioles_bot.config import BotConfig
 from orioles_bot.formatting import format_matchup_history, format_platoon_split
 from orioles_bot.matchups import MatchupService, calculate_matchup_history
-from orioles_bot.models import GameInfo, HittingSplit, PitcherInfo
+from orioles_bot.models import GameInfo, HittingSplit, LineupPlayer, PitcherInfo
 
 
 NOW = datetime(2026, 8, 7, 18, 0, tzinfo=timezone.utc)
@@ -314,3 +316,75 @@ class TestFailedFetchesAreNotCached:
         assert game.is_unplayed
         assert game.is_final
         assert not game.is_in_progress
+
+
+class _StubMlb:
+    def __init__(self, games: list[GameInfo]) -> None:
+        self._games = games
+
+    async def fetch_games(self, target_date: object) -> list[GameInfo]:
+        return self._games
+
+    async def fetch_transactions(self, target_date: object) -> list[object]:
+        return []
+
+
+def _lineup_game() -> GameInfo:
+    player = LineupPlayer(
+        player_id=1,
+        name="Player",
+        position="CF",
+        batting_order=1,
+        headshot_url=None,
+    )
+    return replace(
+        _game("In Progress", abstract="Live", coded="I"),
+        lineup=(player,),
+        opponent_lineup=(player,),
+    )
+
+
+def _run_poll(config: BotConfig) -> tuple[list[str], list[str]]:
+    """Poll once with the network stubbed out, returning where each card went."""
+    bot = OriolesBot(config)
+    bot.mlb = _StubMlb([_lineup_game()])
+    lineup_targets: list[str] = []
+    substitution_targets: list[str] = []
+
+    async def fake_targets(
+        channel_ids: tuple[int, ...], webhook_urls: tuple[str, ...]
+    ) -> list[str]:
+        return [str(channel_id) for channel_id in channel_ids]
+
+    async def fake_lineup(game, targets, target_date):  # type: ignore[no-untyped-def]
+        lineup_targets.extend(targets)
+
+    async def fake_substitutions(game, targets, target_date):  # type: ignore[no-untyped-def]
+        substitution_targets.extend(targets)
+
+    bot._announcement_targets = fake_targets  # type: ignore[method-assign]
+    bot._announce_lineup = fake_lineup  # type: ignore[method-assign]
+    bot._announce_substitutions = fake_substitutions  # type: ignore[method-assign]
+
+    async def run() -> None:
+        await OriolesBot.poll_updates.coro(bot)
+
+    asyncio.run(run())
+    return lineup_targets, substitution_targets
+
+
+def test_substitutions_follow_the_lineup_channel_by_default() -> None:
+    lineup, substitutions = _run_poll(CONFIG)
+
+    assert lineup == ["123"]
+    assert substitutions == ["123"]
+
+
+def test_substitutions_go_to_their_own_channel_when_set() -> None:
+    """The lineup card stays put while the in-game spam moves elsewhere."""
+    config = replace(CONFIG, substitution_channel_ids=(456,))
+
+    lineup, substitutions = _run_poll(config)
+
+    assert lineup == ["123"]
+    assert substitutions == ["456"]
