@@ -44,6 +44,8 @@ class BotConfig:
     poll_interval_seconds: int
     matchup_min_pa: int
     time_zone: ZoneInfo
+    substitution_channel_ids: tuple[int, ...] = ()
+    substitution_webhook_urls: tuple[str, ...] = ()
     live_poll_interval_seconds: int = DEFAULT_LIVE_POLL_INTERVAL_SECONDS
     pregame_poll_interval_seconds: int = DEFAULT_PREGAME_POLL_INTERVAL_SECONDS
     pregame_lead_minutes: int = DEFAULT_PREGAME_LEAD_MINUTES
@@ -54,8 +56,21 @@ class BotConfig:
         return self.discord_channel_ids[0] if self.discord_channel_ids else None
 
     @property
+    def has_substitution_targets(self) -> bool:
+        """Whether in-game substitutions have a destination of their own.
+
+        When nothing is configured the cards stay with the lineup posts, which
+        is how the bot behaved before the split.
+        """
+        return bool(self.substitution_channel_ids or self.substitution_webhook_urls)
+
+    @property
     def has_announcement_targets(self) -> bool:
-        return bool(self.discord_channel_ids or self.discord_webhook_urls)
+        return bool(
+            self.discord_channel_ids
+            or self.discord_webhook_urls
+            or self.has_substitution_targets
+        )
 
 
 def _optional_int(value: str | None, name: str) -> int | None:
@@ -164,6 +179,12 @@ def load_config() -> BotConfig:
         ),
         discord_webhook_urls=_webhook_urls(
             os.getenv("DISCORD_WEBHOOK_URL"), "DISCORD_WEBHOOK_URL"
+        ),
+        substitution_channel_ids=_channel_ids(
+            os.getenv("SUBSTITUTION_CHANNEL_ID"), "SUBSTITUTION_CHANNEL_ID"
+        ),
+        substitution_webhook_urls=_webhook_urls(
+            os.getenv("SUBSTITUTION_WEBHOOK_URL"), "SUBSTITUTION_WEBHOOK_URL"
         ),
         poll_interval_seconds=poll_interval,
         live_poll_interval_seconds=live_poll_interval,

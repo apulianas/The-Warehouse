@@ -47,6 +47,8 @@ A Dockerized Python 3.12 Discord bot that posts Baltimore Orioles lineups, roste
   defensive replacement gets his history against the pitcher on the mound and
   his splits versus that hand; a pinch runner gets his stolen base record and
   Statcast sprint speed, since he is not coming up to bat.
+- Substitution cards can be routed to their own channel with
+  `SUBSTITUTION_CHANNEL_ID`, keeping the daily lineup card where it is.
 - Duplicate announcement prevention across restarts using `/data/state.json`.
 - Graceful empty states when there is no game, lineup, transaction, standings, or
   schedule data.
@@ -81,6 +83,25 @@ Each channel is tracked separately, so a channel you add later starts posting fr
 next update rather than replaying everything the first channel already announced, and a
 channel the bot cannot reach is retried instead of being silently marked as sent. The bot
 needs View Channel, Send Messages, and Embed Links in every channel you list.
+
+### Keeping substitutions out of the lineup channel
+
+Substitutions land constantly once a game starts, which can bury the daily
+lineup card. Point them at their own channel and the lineup and transaction
+posts stay where they are:
+
+```env
+DISCORD_CHANNEL_ID=123456789012345678
+SUBSTITUTION_CHANNEL_ID=987654321098765432
+```
+
+```bash
+docker compose up -d
+```
+
+`SUBSTITUTION_WEBHOOK_URL` does the same thing for a server the bot is not
+installed in, and both accept comma-separated lists. Leave both unset and
+substitutions keep going to the lineup channel, as before.
 
 ### Posting to a server you cannot add the bot to
 
@@ -126,6 +147,8 @@ even in a webhook-only setup, because the bot needs a Discord session to run.
 | `DISCORD_TOKEN` | Yes | | Discord bot token. Never commit it. |
 | `DISCORD_CHANNEL_ID` | No | | Channel ID for background polling announcements. Separate multiple IDs with commas to post the same updates to several channels. |
 | `DISCORD_WEBHOOK_URL` | No | | Webhook URL for posting into a server where the bot is not installed. Separate multiple URLs with commas. Contains a secret token; keep it out of source control. |
+| `SUBSTITUTION_CHANNEL_ID` | No | | Channel ID for in-game substitution cards. Separate multiple IDs with commas. When neither this nor `SUBSTITUTION_WEBHOOK_URL` is set, substitutions go to the same targets as lineups. |
+| `SUBSTITUTION_WEBHOOK_URL` | No | | Webhook URL for in-game substitution cards. Separate multiple URLs with commas. Contains a secret token; keep it out of source control. |
 | `POLL_INTERVAL_SECONDS` | No | `300` | Idle poll interval, used when no game is near. Minimum 30 seconds. |
 | `LIVE_POLL_INTERVAL_SECONDS` | No | `60` | Poll interval while a game is underway, including during a rain delay. Minimum 30 seconds. |
 | `PREGAME_POLL_INTERVAL_SECONDS` | No | `120` | Poll interval in the run up to first pitch, when the lineup card is posted. Minimum 30 seconds. |
