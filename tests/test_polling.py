@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -402,6 +403,8 @@ def test_substitutions_go_to_their_own_channel_when_set() -> None:
 POVICH_ID = 683551
 SANDERS_ID = 681857
 MAYO_ID = 683002
+CONTRERAS_ID = 665795
+MORTON_ID = 450203
 
 
 def _transaction(
@@ -443,6 +446,20 @@ DESIGNATED = _transaction(
     "Baltimore Orioles designated 1B Coby Mayo for assignment.",
     MAYO_ID,
     "Coby Mayo",
+)
+SELECTED = _transaction(
+    "4",
+    "Selected",
+    "Baltimore Orioles selected the contract of RHP Roansy Contreras from Norfolk Tides.",
+    CONTRERAS_ID,
+    "Roansy Contreras",
+)
+TRADE = _transaction(
+    "5",
+    "Trade",
+    "Baltimore Orioles traded RHP Charlie Morton to Detroit Tigers for cash.",
+    MORTON_ID,
+    "Charlie Morton",
 )
 
 
@@ -498,10 +515,65 @@ def test_related_roster_moves_post_as_one_card(tmp_path) -> None:
     assert len(destination.sent) == 1
     content, embeds = destination.sent[0]
     assert content == "Orioles roster transactions"
+    assert len(embeds) == 1
     fields = embeds[0].to_dict()["fields"]  # type: ignore[attr-defined]
-    assert len(fields) == 2
-    assert "Cade Povich" in fields[0]["value"]
-    assert "Cam Sanders" in fields[1]["value"]
+    assert [field["name"] for field in fields] == [
+        "Joining the roster",
+        "Leaving the roster",
+    ]
+    assert "Cam Sanders" in fields[0]["value"]
+    assert "Cade Povich" in fields[1]["value"]
+
+
+def test_a_card_carries_no_per_move_date(tmp_path) -> None:
+    """The title already dates the card, so a date per row was only noise."""
+    bot, destination, _ = _transaction_bot(tmp_path, [OPTIONED, RECALLED])
+
+    _poll(bot)
+
+    payload = destination.sent[0][1][0].to_dict()  # type: ignore[attr-defined]
+    assert payload["title"].startswith("Orioles transactions — ")
+    assert not any(
+        re.search(r"\d{4}-\d{2}-\d{2}", field["name"]) for field in payload["fields"]
+    )
+
+
+def test_two_arrivals_each_get_their_own_thumbnail(tmp_path) -> None:
+    """One embed carries one face, so a second call-up gets a card of his own."""
+    bot, destination, _ = _transaction_bot(
+        tmp_path, [OPTIONED, DESIGNATED, RECALLED, SELECTED]
+    )
+
+    _poll(bot)
+
+    assert len(destination.sent) == 1
+    embeds = [embed.to_dict() for embed in destination.sent[0][1]]  # type: ignore[attr-defined]
+    assert len(embeds) == 3
+    assert embeds[0]["thumbnail"]["url"] == headshot_url(SANDERS_ID)
+    assert embeds[1]["thumbnail"]["url"] == headshot_url(CONTRERAS_ID)
+    # Thumbnails only: a column of full-width photos fills a phone screen.
+    assert not any("image" in embed for embed in embeds)
+    # The heading is not repeated on the second player's card.
+    assert embeds[0]["fields"][0]["name"] == "Joining the roster"
+    assert embeds[1]["fields"][0]["name"] == "\u200b"
+    # Everyone leaving shares the closing card.
+    assert embeds[2]["fields"][0]["name"] == "Leaving the roster"
+    assert "Cade Povich" in embeds[2]["fields"][0]["value"]
+    assert "Coby Mayo" in embeds[2]["fields"][0]["value"]
+
+
+def test_a_trade_is_not_forced_onto_either_side(tmp_path) -> None:
+    """A trade names both directions, so claiming it for one would misread it."""
+    bot, destination, _ = _transaction_bot(tmp_path, [RECALLED, TRADE])
+
+    _poll(bot)
+
+    fields = destination.sent[0][1][0].to_dict()["fields"]  # type: ignore[attr-defined]
+    assert [field["name"] for field in fields] == [
+        "Joining the roster",
+        "Other moves",
+    ]
+    assert "Charlie Morton" in fields[1]["value"]
 
 
 def test_a_grouped_card_shows_the_arriving_player(tmp_path) -> None:

@@ -68,6 +68,17 @@ from .models import (
 
 ORIOLES_ORANGE = discord.Color.from_rgb(223, 70, 1)
 MAX_EMBED_FIELDS = 25
+SECTION_JOINING = "Joining the roster"
+SECTION_LEAVING = "Leaving the roster"
+SECTION_OTHER = "Other moves"
+TRANSACTION_SECTIONS = (SECTION_JOINING, SECTION_LEAVING, SECTION_OTHER)
+# Discord rejects an empty field name, so a section that spills over a second
+# field continues under a zero-width space instead of repeating its heading.
+BLANK_FIELD_NAME = "\u200b"
+# Discord allows ten embeds per message. A handful of player cards plus the
+# card holding everything else stays well inside that, and stops a deadline day
+# turning the post into a column of photos.
+MAX_TRANSACTION_PHOTO_CARDS = 4
 
 
 def lineup_embeds(
@@ -217,22 +228,126 @@ def transaction_embeds(
             )
         ]
 
-    embed = discord.Embed(
-        title=f"Orioles transactions — {target_date:%B %-d, %Y}",
-        color=ORIOLES_ORANGE,
+    shown = list(transactions[:MAX_EMBED_FIELDS])
+    title = f"Orioles transactions — {target_date:%B %-d, %Y}"
+    footer = (
+        f"Showing {MAX_EMBED_FIELDS} of {len(transactions)} transactions."
+        if len(transactions) > MAX_EMBED_FIELDS
+        else None
     )
-    for transaction in transactions[:25]:
-        embed.add_field(
-            name=transaction.date.isoformat(),
-            value=_limit_field(format_transaction(transaction)),
+
+    featured = _photo_arrivals(shown)
+    if len(featured) < 2:
+        card = _transaction_card(title, shown, footer)
+        _set_transaction_art(card, shown)
+        return [card]
+
+    # Several players joined at once and one card carries one face, so each of
+    # them gets a card of his own. They stay thumbnails: a column of full-width
+    # photos would swallow a phone screen.
+    cards: list[discord.Embed] = []
+    for index, arrival in enumerate(featured):
+        card = discord.Embed(color=ORIOLES_ORANGE)
+        if index == 0:
+            card.title = title
+        card.add_field(
+            name=SECTION_JOINING if index == 0 else BLANK_FIELD_NAME,
+            value=_limit_field(format_transaction(arrival)),
             inline=False,
         )
+        card.set_thumbnail(url=arrival.headshot_url)
+        cards.append(card)
 
-    _set_transaction_art(embed, transactions)
+    remainder = [item for item in shown if item not in featured]
+    if remainder:
+        cards.append(_transaction_card(None, remainder, footer))
+    elif footer:
+        cards[-1].set_footer(text=footer)
+    return cards
 
-    if len(transactions) > 25:
-        embed.set_footer(text=f"Showing 25 of {len(transactions)} transactions.")
-    return [embed]
+
+def _transaction_card(
+    title: str | None,
+    transactions: Sequence[TransactionInfo],
+    footer: str | None,
+) -> discord.Embed:
+    embed = discord.Embed(color=ORIOLES_ORANGE)
+    if title:
+        embed.title = title
+    for name, value in _transaction_sections(transactions):
+        embed.add_field(name=name, value=value, inline=False)
+    if footer:
+        embed.set_footer(text=footer)
+    return embed
+
+
+def _photo_arrivals(
+    transactions: Sequence[TransactionInfo],
+) -> list[TransactionInfo]:
+    """Arriving players who can carry a card of their own.
+
+    A move naming several players has no single face to show, so it stays in
+    the shared card rather than claiming a photo it cannot justify.
+    """
+    arrivals = [
+        item
+        for item in transactions
+        if item.is_arrival and item.headshot_url and len(item.players) <= 1
+    ]
+    return arrivals[:MAX_TRANSACTION_PHOTO_CARDS]
+
+
+def _transaction_sections(
+    transactions: Sequence[TransactionInfo],
+) -> list[tuple[str, str]]:
+    """Sort a card into who is coming and who is going.
+
+    MLB's feed interleaves moves, so two options and the two recalls they pay
+    for arrive shuffled and a flat list hides which players changed places. The
+    headings also replace a per-move date that only ever repeated the one in
+    the title; a retroactive date still reads in the move's own wording.
+    Trades name both directions at once and get their own section rather than
+    being forced onto one side.
+    """
+    grouped: dict[str, list[str]] = {label: [] for label in TRANSACTION_SECTIONS}
+    for transaction in transactions:
+        grouped[_section_label(transaction)].append(format_transaction(transaction))
+
+    fields: list[tuple[str, str]] = []
+    for label in TRANSACTION_SECTIONS:
+        lines = grouped[label]
+        if not lines:
+            continue
+        # A busy day can outrun a single field, so a long section spills into
+        # more of them rather than being truncated away.
+        for index, chunk in enumerate(_pack_field_values(lines)):
+            fields.append((label if index == 0 else BLANK_FIELD_NAME, chunk))
+    return fields
+
+
+def _section_label(transaction: TransactionInfo) -> str:
+    if transaction.is_arrival:
+        return SECTION_JOINING
+    if transaction.is_departure:
+        return SECTION_LEAVING
+    return SECTION_OTHER
+
+
+def _pack_field_values(lines: Sequence[str], max_chars: int = 1024) -> list[str]:
+    values: list[str] = []
+    current: list[str] = []
+    length = 0
+    for line in lines:
+        line = _limit_field(line, max_chars)
+        # The +1 covers the newline joining this line to the one before it.
+        if current and length + len(line) + 1 > max_chars:
+            values.append("\n".join(current))
+            current, length = [], 0
+        length += len(line) + (1 if current else 0)
+        current.append(line)
+    if current:
+        values.append("\n".join(current))
+    return values
 
 
 def _set_transaction_art(
