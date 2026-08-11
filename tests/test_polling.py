@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+import discord
 import pytest
 
 from dataclasses import replace
@@ -12,7 +13,15 @@ from orioles_bot.bot import OriolesBot, poll_interval_for
 from orioles_bot.config import BotConfig
 from orioles_bot.formatting import format_matchup_history, format_platoon_split
 from orioles_bot.matchups import MatchupService, calculate_matchup_history
-from orioles_bot.models import GameInfo, HittingSplit, LineupPlayer, PitcherInfo
+from orioles_bot.mlb import headshot_url
+from orioles_bot.models import (
+    GameInfo,
+    HittingSplit,
+    LineupPlayer,
+    PitcherInfo,
+    TransactionInfo,
+    TransactionPlayer,
+)
 
 
 NOW = datetime(2026, 8, 7, 18, 0, tzinfo=timezone.utc)
@@ -388,3 +397,172 @@ def test_substitutions_go_to_their_own_channel_when_set() -> None:
 
     assert lineup == ["123"]
     assert substitutions == ["456"]
+
+
+POVICH_ID = 683551
+SANDERS_ID = 681857
+MAYO_ID = 683002
+
+
+def _transaction(
+    transaction_id: str,
+    type_description: str,
+    description: str,
+    player_id: int,
+    name: str,
+) -> TransactionInfo:
+    return TransactionInfo(
+        transaction_id=transaction_id,
+        date=date(2026, 8, 7),
+        player_id=player_id,
+        player_name=name,
+        type_description=type_description,
+        description=description,
+        headshot_url=headshot_url(player_id),
+        players=(TransactionPlayer(player_id, name),),
+    )
+
+
+OPTIONED = _transaction(
+    "1",
+    "Optioned",
+    "Baltimore Orioles optioned LHP Cade Povich to Norfolk Tides.",
+    POVICH_ID,
+    "Cade Povich",
+)
+RECALLED = _transaction(
+    "2",
+    "Recalled",
+    "Baltimore Orioles recalled RHP Cam Sanders from Norfolk Tides.",
+    SANDERS_ID,
+    "Cam Sanders",
+)
+DESIGNATED = _transaction(
+    "3",
+    "Designated for Assignment",
+    "Baltimore Orioles designated 1B Coby Mayo for assignment.",
+    MAYO_ID,
+    "Coby Mayo",
+)
+
+
+class _RecordingDestination:
+    def __init__(self) -> None:
+        self.sent: list[tuple[str, list[object]]] = []
+
+    async def send(self, *, content: str, embeds: list[object]) -> None:
+        self.sent.append((content, embeds))
+
+
+class _TransactionMlb:
+    def __init__(self, transactions: list[TransactionInfo]) -> None:
+        self.transactions = transactions
+
+    async def fetch_games(self, target_date: object) -> list[GameInfo]:
+        return []
+
+    async def fetch_transactions(self, target_date: object) -> list[TransactionInfo]:
+        return self.transactions
+
+
+def _transaction_bot(
+    tmp_path, transactions: list[TransactionInfo]
+) -> tuple[OriolesBot, _RecordingDestination, _TransactionMlb]:
+    from orioles_bot.bot import _AnnouncementTarget
+
+    bot = OriolesBot(replace(CONFIG, state_file=str(tmp_path / "state.json")))
+    mlb = _TransactionMlb(transactions)
+    bot.mlb = mlb  # type: ignore[assignment]
+    destination = _RecordingDestination()
+    target = _AnnouncementTarget("123", "channel 123", destination)  # type: ignore[arg-type]
+
+    async def fake_targets(
+        channel_ids: tuple[int, ...], webhook_urls: tuple[str, ...]
+    ) -> list[object]:
+        return [target]
+
+    bot._announcement_targets = fake_targets  # type: ignore[method-assign]
+    return bot, destination, mlb
+
+
+def _poll(bot: OriolesBot) -> None:
+    asyncio.run(OriolesBot.poll_updates.coro(bot))
+
+
+def test_related_roster_moves_post_as_one_card(tmp_path) -> None:
+    """An option out and the recall it pays for are one piece of news."""
+    bot, destination, _ = _transaction_bot(tmp_path, [OPTIONED, RECALLED])
+
+    _poll(bot)
+
+    assert len(destination.sent) == 1
+    content, embeds = destination.sent[0]
+    assert content == "Orioles roster transactions"
+    fields = embeds[0].to_dict()["fields"]  # type: ignore[attr-defined]
+    assert len(fields) == 2
+    assert "Cade Povich" in fields[0]["value"]
+    assert "Cam Sanders" in fields[1]["value"]
+
+
+def test_a_grouped_card_shows_the_arriving_player(tmp_path) -> None:
+    """The recall is the news, even though the option is listed first."""
+    bot, destination, _ = _transaction_bot(tmp_path, [OPTIONED, RECALLED])
+
+    _poll(bot)
+
+    payload = destination.sent[0][1][0].to_dict()  # type: ignore[attr-defined]
+    assert "image" not in payload
+    assert payload["thumbnail"]["url"] == headshot_url(SANDERS_ID)
+
+
+def test_a_lone_move_still_gets_the_full_width_photo(tmp_path) -> None:
+    bot, destination, _ = _transaction_bot(tmp_path, [RECALLED])
+
+    _poll(bot)
+
+    content, embeds = destination.sent[0]
+    assert content == "Orioles roster transaction"
+    payload = embeds[0].to_dict()  # type: ignore[attr-defined]
+    assert "w_426" in payload["image"]["url"]
+    assert "thumbnail" not in payload
+
+
+def test_a_later_move_does_not_repeat_the_ones_already_posted(tmp_path) -> None:
+    bot, destination, mlb = _transaction_bot(tmp_path, [OPTIONED, RECALLED])
+    _poll(bot)
+
+    mlb.transactions = [OPTIONED, RECALLED, DESIGNATED]
+    _poll(bot)
+
+    assert len(destination.sent) == 2
+    content, embeds = destination.sent[1]
+    assert content == "Orioles roster transaction"
+    fields = embeds[0].to_dict()["fields"]  # type: ignore[attr-defined]
+    assert len(fields) == 1
+    assert "Coby Mayo" in fields[0]["value"]
+
+
+def test_nothing_is_posted_when_every_move_has_been_seen(tmp_path) -> None:
+    bot, destination, _ = _transaction_bot(tmp_path, [OPTIONED, RECALLED])
+    _poll(bot)
+
+    _poll(bot)
+
+    assert len(destination.sent) == 1
+
+
+def test_a_failed_post_leaves_the_whole_card_unannounced(tmp_path) -> None:
+    """A partial mark would repost only some of a grouped card next time."""
+    bot, destination, _ = _transaction_bot(tmp_path, [OPTIONED, RECALLED])
+
+    async def refuse(*args: object, **kwargs: object) -> None:
+        raise discord.DiscordException("channel is gone")
+
+    destination.send = refuse  # type: ignore[method-assign]
+    _poll(bot)
+
+    destination.send = _RecordingDestination.send.__get__(destination)  # type: ignore[method-assign]
+    _poll(bot)
+
+    assert len(destination.sent) == 1
+    assert len(destination.sent[0][1][0].to_dict()["fields"]) == 2  # type: ignore[attr-defined]

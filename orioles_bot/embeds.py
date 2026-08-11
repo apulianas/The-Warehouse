@@ -240,17 +240,20 @@ def _set_transaction_art(
 ) -> None:
     """Show a large headshot when the post is about one specific player.
 
-    Automatic announcements post one transaction at a time, so a call-up gets a
-    full-width photo. A multi-player trade or a digest of several transactions
-    falls back to a thumbnail, where a single face would misrepresent the post.
+    A lone call-up gets a full-width photo. A multi-player trade or a card
+    covering several moves falls back to a thumbnail, where a single face would
+    misrepresent the post, and that thumbnail shows the arriving player: in a
+    paired option-out/recall-in the player joining the roster is the news.
     """
     solo = transactions[0] if len(transactions) == 1 else None
     if solo is not None and solo.player_id is not None and len(solo.players) <= 1:
         embed.set_image(url=headshot_url(solo.player_id, HEADSHOT_FEATURE_WIDTH))
         return
 
+    # `sorted` is stable, so arrivals keep their posted order among themselves.
+    arrivals_first = sorted(transactions, key=lambda item: not item.is_arrival)
     first_headshot = next(
-        (item.headshot_url for item in transactions if item.headshot_url), None
+        (item.headshot_url for item in arrivals_first if item.headshot_url), None
     )
     if first_headshot:
         embed.set_thumbnail(url=first_headshot)

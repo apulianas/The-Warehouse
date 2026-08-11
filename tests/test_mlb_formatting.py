@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import date
 
+import pytest
+
 from orioles_bot.formatting import (
     format_lineup,
     format_lineup_heading,
@@ -159,6 +161,60 @@ def test_parse_and_format_transaction() -> None:
 
 def test_no_transactions_message_mentions_date() -> None:
     assert "August" in format_no_transactions(date(2026, 8, 6))
+
+
+@pytest.mark.parametrize(
+    ("type_description", "description", "expected"),
+    [
+        ("Recalled", "Baltimore Orioles recalled RHP Cam Sanders from Norfolk.", True),
+        (
+            "Status Change",
+            "Baltimore Orioles activated RHP Kyle Bradish from the 60-day IL.",
+            True,
+        ),
+        (
+            "Selected",
+            "Baltimore Orioles selected the contract of RHP Roansy Contreras.",
+            True,
+        ),
+        ("Optioned", "Baltimore Orioles optioned LHP Cade Povich to Norfolk.", False),
+        (
+            "Status Change",
+            "Baltimore Orioles placed RHP Zach Eflin on the 15-day IL.",
+            False,
+        ),
+        (
+            "Designated for Assignment",
+            "Baltimore Orioles designated 1B Coby Mayo for assignment.",
+            False,
+        ),
+        (
+            "Outright Assignment",
+            "Baltimore Orioles sent RHP Matt Bowman outright to Norfolk Tides.",
+            False,
+        ),
+        (
+            "Assigned",
+            "Baltimore Orioles sent LHP Trevor Rogers on a rehab assignment.",
+            False,
+        ),
+    ],
+)
+def test_arrival_moves_are_told_apart_from_departures(
+    type_description: str, description: str, expected: bool
+) -> None:
+    """A grouped roster move shows the incoming player, so this decides who."""
+    transaction = TransactionInfo(
+        transaction_id="1",
+        date=date(2026, 8, 6),
+        player_id=1,
+        player_name="Some Player",
+        type_description=type_description,
+        description=description,
+        headshot_url=None,
+    )
+
+    assert transaction.is_arrival is expected
 
 
 def test_format_pitchers_renders_both_starters() -> None:
