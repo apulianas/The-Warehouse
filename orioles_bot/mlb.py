@@ -99,6 +99,28 @@ def savant_matchup_params(batter_id: int | str, pitcher_id: int | str) -> str:
     )
 
 
+def savant_hand_window_params(
+    batter_id: int | str, throws: str, start: date, end: date
+) -> str:
+    """Filters for one batter against one pitching hand over a date range.
+
+    The stats API only reports a platoon split for a whole season, so a
+    recent-form version of that split has to be totalled from Statcast. Both
+    date bounds are inclusive, matching how the search page reads them.
+    """
+    return urlencode(
+        {
+            "all": "true",
+            "batters_lookup[]": str(batter_id),
+            "pitcher_throws": str(throws),
+            "game_date_gt": start.isoformat(),
+            "game_date_lt": end.isoformat(),
+            "hfGT": "R|",
+            "type": "details",
+        }
+    )
+
+
 def savant_player_url(player_id: int | str) -> str:
     return f"{BASEBALL_SAVANT_PLAYER_URL}/{player_id}"
 

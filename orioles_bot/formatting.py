@@ -18,6 +18,7 @@ from .models import (
     PitchingGame,
     PitchingSplit,
     PlayerRef,
+    RECENT_SPLIT_DAYS,
     RunningProfile,
     ScheduleWindow,
     StatsWindow,
@@ -231,7 +232,31 @@ def format_matchup_history(
         return f"Matchup history against {pitcher_name} is unavailable right now."
     if not history.has_history:
         return f"No prior plate appearances against {pitcher_name}."
+    return format_history_line(history)
 
+
+def format_recent_hand_split(
+    history: MatchupHistory | None,
+    hand: str | None,
+    days: int = RECENT_SPLIT_DAYS,
+) -> str:
+    """The same split as the season one, over the last ``days`` days.
+
+    A season platoon line absorbs a slump that started three weeks ago, so the
+    short window is what says whether the batter is in form right now.
+    """
+    label = HAND_NAMES.get(hand or "", "this hand")
+    if history is None:
+        # As with a matchup, an unavailable lookup is not a claim about
+        # whether the batter has faced this hand lately.
+        return f"Recent form against {label} is unavailable right now."
+    if not history.has_history:
+        return f"No plate appearances against {label} in the last {days} days."
+    return format_history_line(history)
+
+
+def format_history_line(history: MatchupHistory) -> str:
+    """A Statcast total as a box score line: hits, extras, then rates."""
     line = f"{history.hits}-for-{history.at_bats}"
     extras = []
     if history.doubles:

@@ -8,11 +8,16 @@ from orioles_bot.embeds import substitution_embeds
 from orioles_bot.formatting import (
     format_matchup_history,
     format_platoon_split,
+    format_recent_hand_split,
     format_running_profile,
     format_substitution_headline,
     format_substitution_pitcher,
 )
-from orioles_bot.matchups import MatchupService, calculate_matchup_history
+from orioles_bot.matchups import (
+    MatchupService,
+    calculate_matchup_history,
+    statcast_hand_window_csv_url,
+)
 from orioles_bot.mlb import (
     MlbApiError,
     _entry_position,
@@ -323,6 +328,103 @@ def test_format_platoon_split_handles_an_empty_sample() -> None:
     assert "unavailable" in format_platoon_split(None, "L")
 
 
+def test_format_recent_hand_split_reads_like_the_career_line() -> None:
+    """The short window is a box score line, matched to the career field."""
+    history = MatchupHistory(
+        plate_appearances=28,
+        at_bats=24,
+        hits=7,
+        doubles=2,
+        home_runs=1,
+        walks=4,
+        strikeouts=6,
+        average=0.292,
+        slugging_percentage=0.5,
+    )
+
+    text = format_recent_hand_split(history, "R")
+
+    assert "7-for-24" in text
+    assert "1 HR" in text
+    assert ".292 AVG" in text
+    assert "28 PA" in text
+
+
+def test_format_recent_hand_split_separates_a_quiet_window_from_a_failed_one() -> None:
+    empty = format_recent_hand_split(MatchupHistory(), "L", days=14)
+    assert "No plate appearances against LHP in the last 14 days" in empty
+    # A failed lookup is not the same claim as an empty one.
+    assert "unavailable" in format_recent_hand_split(None, "L")
+
+
+def test_recent_form_is_fetched_once_per_window() -> None:
+    """The window is part of the key, so tomorrow's card refetches."""
+    calls: list[tuple[int, str, date, date]] = []
+
+    def hand_fetcher(
+        batter_id: int, throws: str, start: date, end: date
+    ) -> list[dict[str, object]]:
+        calls.append((batter_id, throws, start, end))
+        return [{"events": "single", "woba_value": 0.9, "woba_denom": 1}]
+
+    async def run() -> None:
+        service = MatchupService(min_pa=5, hand_fetcher=hand_fetcher)
+        first = await service.hand_history(
+            101, "R", date(2026, 7, 25), date(2026, 8, 7)
+        )
+        again = await service.hand_history(
+            101, "R", date(2026, 7, 25), date(2026, 8, 7)
+        )
+        rolled = await service.hand_history(
+            101, "R", date(2026, 7, 26), date(2026, 8, 8)
+        )
+        assert first is not None and first.hits == 1
+        assert again == first
+        assert rolled is not None
+
+    asyncio.run(run())
+
+    assert calls == [
+        (101, "R", date(2026, 7, 25), date(2026, 8, 7)),
+        (101, "R", date(2026, 7, 26), date(2026, 8, 8)),
+    ]
+
+
+def test_a_failed_recent_form_fetch_is_not_cached() -> None:
+    """A Statcast hiccup must not stick to the window for the whole day."""
+    attempts = 0
+
+    def hand_fetcher(
+        batter_id: int, throws: str, start: date, end: date
+    ) -> list[dict[str, object]]:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("savant is down")
+        return [{"events": "double", "woba_value": 1.2, "woba_denom": 1}]
+
+    async def run() -> None:
+        service = MatchupService(min_pa=5, hand_fetcher=hand_fetcher)
+        window = (101, "L", date(2026, 7, 25), date(2026, 8, 7))
+        assert await service.hand_history(*window) is None
+        recovered = await service.hand_history(*window)
+        assert recovered is not None and recovered.doubles == 1
+
+    asyncio.run(run())
+    assert attempts == 2
+
+
+def test_recent_form_url_carries_the_hand_and_both_dates() -> None:
+    url = statcast_hand_window_csv_url(1900, "L", date(2026, 7, 25), date(2026, 8, 7))
+
+    assert "batters_lookup%5B%5D=1900" in url
+    assert "pitcher_throws=L" in url
+    assert "game_date_gt=2026-07-25" in url
+    assert "game_date_lt=2026-08-07" in url
+    # No pitcher filter: the whole point is every arm of that hand.
+    assert "pitchers_lookup" not in url
+
+
 def test_substitution_headline_names_both_players_and_the_slot() -> None:
     substitution = Substitution(
         game_pk=777,
@@ -371,6 +473,62 @@ def test_substitution_embed_carries_both_matchup_views() -> None:
     assert "Career vs Ace Reliever" in names
     assert "This season vs LHP" in names
     assert embed.thumbnail.url == headshot_url(1900)
+
+
+def test_substitution_embed_puts_recent_form_beside_the_season_split() -> None:
+    """A season line absorbs a slump; the short window is what shows it."""
+    substitution = Substitution(
+        game_pk=777,
+        slot=9,
+        batter=LineupPlayer(
+            1900, "Pinch Oriole", "PH", 9, headshot_url(1900), 1, bat_side="R"
+        ),
+        replaced=LineupPlayer(1009, "Oriole 9", "C", 9, headshot_url(1009)),
+        pitcher=PitcherInfo(player_id=9, name="Ace Reliever", throws="L"),
+        is_orioles=True,
+        batting_team="Baltimore Orioles",
+        batting_team_id=ORIOLES_ID,
+    )
+    splits = {1900: HittingSplit(plate_appearances=25, average=0.381, ops=1.315)}
+    recent = {
+        1900: MatchupHistory(
+            plate_appearances=12,
+            at_bats=11,
+            hits=1,
+            strikeouts=5,
+            average=0.091,
+            slugging_percentage=0.091,
+        )
+    }
+
+    embed = substitution_embeds([substitution], {}, splits, {}, recent)[0]
+
+    fields = {field.name: field.value or "" for field in embed.fields}
+    assert list(fields) == [
+        "Career vs Ace Reliever",
+        "This season vs LHP",
+        "Last 14 days vs LHP",
+    ]
+    assert "1-for-11" in fields["Last 14 days vs LHP"]
+    assert "12 PA" in fields["Last 14 days vs LHP"]
+
+
+def test_recent_form_is_dropped_when_the_pitcher_has_no_known_hand() -> None:
+    """Statcast cannot filter an unannounced arm, so the row would say nothing."""
+    substitution = Substitution(
+        game_pk=777,
+        slot=9,
+        batter=LineupPlayer(1900, "Pinch Oriole", "PH", 9, headshot_url(1900), 1),
+        replaced=None,
+        pitcher=PitcherInfo(player_id=9, name="Ace Reliever", throws=None),
+        is_orioles=True,
+        batting_team="Baltimore Orioles",
+        batting_team_id=ORIOLES_ID,
+    )
+
+    embed = substitution_embeds([substitution])[0]
+
+    assert not any("Last 14 days" in field.name for field in embed.fields)
 
 
 def test_substitution_embed_survives_missing_stats() -> None:
@@ -434,10 +592,10 @@ class _Recorder:
     """Stands in for a Discord channel, capturing what would be posted."""
 
     def __init__(self) -> None:
-        self.posts: list[tuple[str, list[object]]] = []
+        self.posts: list[list[object]] = []
 
-    async def send(self, content: str, embeds: list[object]) -> None:
-        self.posts.append((content, list(embeds)))
+    async def send(self, embeds: list[object]) -> None:
+        self.posts.append(list(embeds))
 
 
 class _StubMlb:
@@ -468,7 +626,11 @@ def _bot(tmp_path):
     )
     bot = OriolesBot(config)
     bot.mlb = _StubMlb()
-    bot.matchups = MatchupService(min_pa=5, fetcher=lambda batter, pitcher: [])
+    bot.matchups = MatchupService(
+        min_pa=5,
+        fetcher=lambda batter, pitcher: [],
+        hand_fetcher=lambda batter, throws, start, end: [],
+    )
     return bot
 
 
@@ -499,12 +661,15 @@ def test_a_full_game_posts_one_lineup_and_one_card_per_substitution(tmp_path) ->
 
     asyncio.run(run())
 
-    lineups = [post for post in recorder.posts if "lineup" in post[0]]
-    substitutions = [post for post in recorder.posts if "substitution" in post[0]]
+    def is_substitution(post: list[object]) -> bool:
+        return all("substitution" in (embed.title or "") for embed in post)
+
+    lineups = [post for post in recorder.posts if not is_substitution(post)]
+    substitutions = [post for post in recorder.posts if is_substitution(post)]
 
     assert len(lineups) == 1
     assert len(substitutions) == 2
-    assert all(len(embeds) == 1 for _, embeds in substitutions)
+    assert all(len(embeds) == 1 for embeds in substitutions)
 
 
 def test_substitutions_before_first_pitch_do_not_post_a_card(tmp_path) -> None:
@@ -521,6 +686,60 @@ def test_substitutions_before_first_pitch_do_not_post_a_card(tmp_path) -> None:
     asyncio.run(run())
 
     assert recorder.posts == []
+
+
+def test_recent_form_is_fetched_for_the_hand_on_the_mound(tmp_path) -> None:
+    """The short window has to track the arm actually pitching, not the starter."""
+    from orioles_bot.bot import _AnnouncementTarget
+
+    calls: list[tuple[int, str, date, date]] = []
+
+    def hand_fetcher(
+        batter_id: int, throws: str, start: date, end: date
+    ) -> list[dict[str, object]]:
+        calls.append((batter_id, throws, start, end))
+        return [{"events": "single", "woba_value": 0.9, "woba_denom": 1}]
+
+    bot = _bot(tmp_path)
+    bot.matchups = MatchupService(
+        min_pa=5,
+        fetcher=lambda batter, pitcher: [],
+        hand_fetcher=hand_fetcher,
+    )
+    recorder = _Recorder()
+    targets = [_AnnouncementTarget("123", "channel 123", recorder)]
+
+    async def run() -> None:
+        game = parse_game(_raw_game("In Progress"), _boxscore(orioles_subs=True))
+        await bot._announce_substitutions(game, targets, date(2026, 8, 7))
+
+    asyncio.run(run())
+
+    # The stub hands back a left-handed reliever, and 14 days ends on the day
+    # the card is posted.
+    assert calls == [(1900, "L", date(2026, 7, 25), date(2026, 8, 7))]
+    fields = {field.name: field.value or "" for field in recorder.posts[0][0].fields}
+    assert "1-for-1" in fields["Last 14 days vs LHP"]
+
+
+def test_cards_are_posted_with_no_line_of_text_above_them(tmp_path) -> None:
+    """The embed already titles itself, so message text only said it twice."""
+    from orioles_bot.bot import _AnnouncementTarget
+
+    bot = _bot(tmp_path)
+    recorder = _Recorder()
+    targets = [_AnnouncementTarget("123", "channel 123", recorder)]
+
+    async def run() -> None:
+        game = parse_game(_raw_game("In Progress"), _boxscore(orioles_subs=True))
+        await bot._announce_lineup(game, targets, date(2026, 8, 7))
+        await bot._announce_substitutions(game, targets, date(2026, 8, 7))
+
+    asyncio.run(run())
+
+    # _Recorder only accepts embeds, so a content argument would have raised.
+    assert len(recorder.posts) == 2
+    assert all(post for post in recorder.posts)
 
 
 def _lineup_player_with_entry(entry: str | None) -> LineupPlayer:
@@ -623,6 +842,7 @@ def test_pinch_hitter_and_defensive_sub_keep_the_hitting_card() -> None:
         assert [field.name for field in embed.fields] == [
             "Career vs Ace Reliever",
             "This season vs LHP",
+            "Last 14 days vs LHP",
         ]
         assert (embed.title or "").startswith("🔄")
         assert "Facing" in (embed.description or "")

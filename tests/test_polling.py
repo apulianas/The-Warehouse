@@ -465,10 +465,10 @@ TRADE = _transaction(
 
 class _RecordingDestination:
     def __init__(self) -> None:
-        self.sent: list[tuple[str, list[object]]] = []
+        self.sent: list[list[object]] = []
 
-    async def send(self, *, content: str, embeds: list[object]) -> None:
-        self.sent.append((content, embeds))
+    async def send(self, *, embeds: list[object]) -> None:
+        self.sent.append(embeds)
 
 
 class _TransactionMlb:
@@ -513,8 +513,7 @@ def test_related_roster_moves_post_as_one_card(tmp_path) -> None:
     _poll(bot)
 
     assert len(destination.sent) == 1
-    content, embeds = destination.sent[0]
-    assert content == "Orioles roster transactions"
+    embeds = destination.sent[0]
     assert len(embeds) == 1
     fields = embeds[0].to_dict()["fields"]  # type: ignore[attr-defined]
     assert [field["name"] for field in fields] == [
@@ -531,7 +530,7 @@ def test_a_card_carries_no_per_move_date(tmp_path) -> None:
 
     _poll(bot)
 
-    payload = destination.sent[0][1][0].to_dict()  # type: ignore[attr-defined]
+    payload = destination.sent[0][0].to_dict()  # type: ignore[attr-defined]
     assert payload["title"].startswith("Orioles transactions — ")
     assert not any(
         re.search(r"\d{4}-\d{2}-\d{2}", field["name"]) for field in payload["fields"]
@@ -547,7 +546,7 @@ def test_two_arrivals_each_get_their_own_thumbnail(tmp_path) -> None:
     _poll(bot)
 
     assert len(destination.sent) == 1
-    embeds = [embed.to_dict() for embed in destination.sent[0][1]]  # type: ignore[attr-defined]
+    embeds = [embed.to_dict() for embed in destination.sent[0]]  # type: ignore[attr-defined]
     assert len(embeds) == 3
     assert embeds[0]["thumbnail"]["url"] == headshot_url(SANDERS_ID)
     assert embeds[1]["thumbnail"]["url"] == headshot_url(CONTRERAS_ID)
@@ -568,7 +567,7 @@ def test_a_trade_is_not_forced_onto_either_side(tmp_path) -> None:
 
     _poll(bot)
 
-    fields = destination.sent[0][1][0].to_dict()["fields"]  # type: ignore[attr-defined]
+    fields = destination.sent[0][0].to_dict()["fields"]  # type: ignore[attr-defined]
     assert [field["name"] for field in fields] == [
         "Joining the roster",
         "Other moves",
@@ -582,7 +581,7 @@ def test_a_grouped_card_shows_the_arriving_player(tmp_path) -> None:
 
     _poll(bot)
 
-    payload = destination.sent[0][1][0].to_dict()  # type: ignore[attr-defined]
+    payload = destination.sent[0][0].to_dict()  # type: ignore[attr-defined]
     assert "image" not in payload
     assert payload["thumbnail"]["url"] == headshot_url(SANDERS_ID)
 
@@ -593,8 +592,7 @@ def test_a_lone_move_keeps_a_thumbnail(tmp_path) -> None:
 
     _poll(bot)
 
-    content, embeds = destination.sent[0]
-    assert content == "Orioles roster transaction"
+    embeds = destination.sent[0]
     payload = embeds[0].to_dict()  # type: ignore[attr-defined]
     assert "image" not in payload
     assert payload["thumbnail"]["url"] == headshot_url(SANDERS_ID)
@@ -608,8 +606,7 @@ def test_a_later_move_does_not_repeat_the_ones_already_posted(tmp_path) -> None:
     _poll(bot)
 
     assert len(destination.sent) == 2
-    content, embeds = destination.sent[1]
-    assert content == "Orioles roster transaction"
+    embeds = destination.sent[1]
     fields = embeds[0].to_dict()["fields"]  # type: ignore[attr-defined]
     assert len(fields) == 1
     assert "Coby Mayo" in fields[0]["value"]
@@ -638,4 +635,4 @@ def test_a_failed_post_leaves_the_whole_card_unannounced(tmp_path) -> None:
     _poll(bot)
 
     assert len(destination.sent) == 1
-    assert len(destination.sent[0][1][0].to_dict()["fields"]) == 2  # type: ignore[attr-defined]
+    assert len(destination.sent[0][0].to_dict()["fields"]) == 2  # type: ignore[attr-defined]
