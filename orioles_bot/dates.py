@@ -36,11 +36,19 @@ def stats_window(
     days: int, time_zone: ZoneInfo, now: datetime | None = None
 ) -> StatsWindow:
     """The inclusive day range covering the last ``days`` days, today included."""
+    return stats_window_ending(days, today_in_zone(time_zone, now))
+
+
+def stats_window_ending(days: int, end: date) -> StatsWindow:
+    """The inclusive day range of ``days`` days ending on ``end``.
+
+    Anchored to a caller-supplied day rather than the clock, so a window built
+    while working a given date stays on that date.
+    """
     if days < MIN_STATS_WINDOW_DAYS or days > MAX_STATS_WINDOW_DAYS:
         raise ValueError(
             f"Days must be between {MIN_STATS_WINDOW_DAYS} and {MAX_STATS_WINDOW_DAYS}"
         )
-    end = today_in_zone(time_zone, now)
     return StatsWindow(days=days, start=end - timedelta(days=days - 1), end=end)
 
 

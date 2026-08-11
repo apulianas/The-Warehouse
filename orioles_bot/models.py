@@ -39,6 +39,13 @@ SUBSTITUTION_ROLE_HITTER = "pinch hitter"
 SUBSTITUTION_ROLE_RUNNER = "pinch runner"
 SUBSTITUTION_ROLE_FIELDER = "defensive substitution"
 SUBSTITUTION_ROLE_UNKNOWN = "substitution"
+# How far back a substitute's recent-form split reaches. Long enough to gather
+# a readable sample against one hand, short enough that a slump the season
+# split has absorbed still shows.
+RECENT_SPLIT_DAYS = 14
+# Statcast filters on a literal pitching hand, so a switch pitcher or an
+# unannounced arm has no recent-form split to fetch or show.
+RECENT_SPLIT_HANDS = frozenset({"L", "R"})
 
 
 def normalize_game_state(status: str | None) -> str:

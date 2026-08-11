@@ -34,6 +34,7 @@ from .formatting import (
     format_stats_window,
     format_substitution_headline,
     format_substitution_pitcher,
+    format_recent_hand_split,
     format_running_profile,
     format_transaction,
     format_wild_card,
@@ -56,6 +57,8 @@ from .models import (
     PitchingSplit,
     PitchingGame,
     PlayerRef,
+    RECENT_SPLIT_DAYS,
+    RECENT_SPLIT_HANDS,
     RunningProfile,
     ScheduleWindow,
     StatsWindow,
@@ -150,6 +153,7 @@ def substitution_embeds(
     histories: Mapping[tuple[int, int], MatchupHistory] | None = None,
     platoon_splits: Mapping[int, HittingSplit] | None = None,
     running_profiles: Mapping[int, RunningProfile] | None = None,
+    recent_splits: Mapping[int, MatchupHistory] | None = None,
 ) -> list[discord.Embed]:
     """One compact card per player who entered the game.
 
@@ -203,11 +207,21 @@ def substitution_embeds(
                 inline=False,
             )
             hand = pitcher.throws if pitcher is not None else None
+            hand_label = HAND_NAMES.get(hand or "", "this hand")
             embed.add_field(
-                name=f"This season vs {HAND_NAMES.get(hand or '', 'this hand')}",
+                name=f"This season vs {hand_label}",
                 value=_limit_field(format_platoon_split(split, hand)),
                 inline=False,
             )
+            # Without a known hand there is no recent split to fetch, and a
+            # second "unavailable" row would only pad the card.
+            if hand in RECENT_SPLIT_HANDS:
+                recent = (recent_splits or {}).get(batter.player_id)
+                embed.add_field(
+                    name=f"Last {RECENT_SPLIT_DAYS} days vs {hand_label}",
+                    value=_limit_field(format_recent_hand_split(recent, hand)),
+                    inline=False,
+                )
 
         embed.set_thumbnail(url=headshot_url(batter.player_id))
         embed.set_footer(text=f"Game PK {substitution.game_pk}")

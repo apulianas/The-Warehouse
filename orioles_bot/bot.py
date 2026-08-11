@@ -23,6 +23,7 @@ from .dates import (
     parse_user_date,
     schedule_window,
     stats_window,
+    stats_window_ending,
     today_in_zone,
 )
 from .embeds import (
@@ -46,6 +47,8 @@ from .models import (
     HittingSplit,
     MatchupHistory,
     NextGame,
+    RECENT_SPLIT_DAYS,
+    RECENT_SPLIT_HANDS,
     RunningProfile,
     Substitution,
     TransactionInfo,
@@ -239,7 +242,7 @@ class OriolesBot(commands.Bot):
             [game], target_date, self.config.time_zone, matchup_annotations
         )
         for target in pending:
-            await self._announce(target, [key], "Orioles lineup update", embeds)
+            await self._announce(target, [key], embeds)
 
     async def _announce_transactions(
         self,
@@ -267,15 +270,9 @@ class OriolesBot(commands.Bot):
             ]
             if not pending:
                 continue
-            content = (
-                "Orioles roster transaction"
-                if len(pending) == 1
-                else "Orioles roster transactions"
-            )
             await self._announce(
                 target,
                 [transaction_announcement_key(item) for item in pending],
-                content,
                 transaction_embeds(pending, target_date),
             )
 
@@ -317,16 +314,18 @@ class OriolesBot(commands.Bot):
         self,
         target: _AnnouncementTarget,
         keys: Sequence[str],
-        content: str,
         embeds: list[discord.Embed],
     ) -> None:
         """Post to one target, marking it sent only for that target.
+
+        Nothing is written above the embeds: every card already titles itself,
+        so a line of message text only said the same thing twice.
 
         A card can cover several announcements, so every key it settles is
         marked together: a partial mark would repost the rest on the next poll.
         """
         try:
-            await target.destination.send(content=content, embeds=embeds)
+            await target.destination.send(embeds=embeds)
         except discord.DiscordException as exc:
             LOGGER.warning("Could not post to %s: %s", target.label, exc)
             return
@@ -363,19 +362,16 @@ class OriolesBot(commands.Bot):
         resolved = await self._resolve_substitutions(
             [substitution for substitution, _, _ in pending]
         )
-        histories, splits, profiles = await self._substitution_stats(
+        histories, splits, recent, profiles = await self._substitution_stats(
             resolved, target_date
         )
 
         for substitution, (_, key, waiting) in zip(resolved, pending, strict=True):
-            embeds = substitution_embeds([substitution], histories, splits, profiles)
+            embeds = substitution_embeds(
+                [substitution], histories, splits, profiles, recent
+            )
             for target in waiting:
-                await self._announce(
-                    target,
-                    [key],
-                    f"{substitution.batting_team} substitution",
-                    embeds,
-                )
+                await self._announce(target, [key], embeds)
 
     async def _resolve_substitutions(
         self, substitutions: list[Substitution]
@@ -417,6 +413,7 @@ class OriolesBot(commands.Bot):
     ) -> tuple[
         dict[tuple[int, int], MatchupHistory],
         dict[int, HittingSplit],
+        dict[int, MatchupHistory],
         dict[int, RunningProfile],
     ]:
         """Stats for the incoming players, fetched per role.
@@ -435,11 +432,12 @@ class OriolesBot(commands.Bot):
             and substitution.pitcher.player_id is not None
         ]
         histories = await self.matchups.history_many(pairs)
+        recent = await self._recent_hand_splits(hitters, target_date)
 
         splits: dict[int, HittingSplit] = {}
         profiles: dict[int, RunningProfile] = {}
         if self.mlb is None:
-            return histories, splits, profiles
+            return histories, splits, recent, profiles
 
         for substitution in hitters:
             pitcher = substitution.pitcher
@@ -476,7 +474,34 @@ class OriolesBot(commands.Bot):
             if profile is not None:
                 profiles[substitution.batter.player_id] = profile
 
-        return histories, splits, profiles
+        return histories, splits, recent, profiles
+
+    async def _recent_hand_splits(
+        self, hitters: Sequence[Substitution], target_date: date
+    ) -> dict[int, MatchupHistory]:
+        """The last stretch of games against the hand each hitter will face.
+
+        Keyed by batter because a card only ever shows the one hand its
+        pitcher throws with.
+        """
+        window = stats_window_ending(RECENT_SPLIT_DAYS, target_date)
+        wanted: dict[int, str] = {}
+        for substitution in hitters:
+            pitcher = substitution.pitcher
+            hand = pitcher.throws if pitcher is not None else None
+            if hand in RECENT_SPLIT_HANDS:
+                wanted[substitution.batter.player_id] = str(hand)
+
+        histories = await self.matchups.hand_history_many(
+            (player_id, hand, window.start, window.end)
+            for player_id, hand in wanted.items()
+        )
+        return {
+            player_id: history
+            for player_id, hand in wanted.items()
+            if (history := histories.get((player_id, hand, window.start, window.end)))
+            is not None
+        }
 
     async def _running_profile(
         self, player_id: int, name: str, season: int

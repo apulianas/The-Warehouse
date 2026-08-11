@@ -1,11 +1,25 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 
 import pytest
 
-from orioles_bot.dates import parse_user_date, today_in_zone
+from orioles_bot.dates import parse_user_date, stats_window_ending, today_in_zone
+
+
+def test_stats_window_ending_counts_back_from_the_day_given() -> None:
+    """Anchored to a date rather than the clock, both ends inclusive."""
+    window = stats_window_ending(14, date(2026, 8, 7))
+
+    assert window.start == date(2026, 7, 25)
+    assert window.end == date(2026, 8, 7)
+    assert window.days == 14
+
+
+def test_stats_window_ending_rejects_an_out_of_range_span() -> None:
+    with pytest.raises(ValueError, match="between"):
+        stats_window_ending(0, date(2026, 8, 7))
 
 
 def test_today_in_zone_uses_configured_timezone() -> None:
