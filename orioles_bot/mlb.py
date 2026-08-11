@@ -47,7 +47,6 @@ HEADSHOT_URL_TEMPLATE = (
     "/v1/people/{player_id}/headshot/67/current"
 )
 HEADSHOT_THUMBNAIL_WIDTH = 180
-HEADSHOT_FEATURE_WIDTH = 426
 BASEBALL_SAVANT_PLAYER_URL = "https://baseballsavant.mlb.com/savant-player"
 BASEBALL_SAVANT_PREVIEW_URL = "https://baseballsavant.mlb.com/preview"
 BASEBALL_SAVANT_PLAYER_MATCHUP_URL = "https://baseballsavant.mlb.com/player_matchup"

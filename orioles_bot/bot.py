@@ -201,14 +201,7 @@ class OriolesBot(commands.Bot):
                 game, substitution_targets, target_date
             )
 
-        for transaction in transactions:
-            key = transaction_announcement_key(transaction)
-            embeds = transaction_embeds([transaction], target_date)
-            for target in targets:
-                if self.announcement_state.unseen(channel_key(key, target.key_id)):
-                    await self._announce(
-                        target, key, "Orioles roster transaction", embeds
-                    )
+        await self._announce_transactions(transactions, targets, target_date)
 
         self._apply_poll_interval(games)
 
@@ -246,7 +239,45 @@ class OriolesBot(commands.Bot):
             [game], target_date, self.config.time_zone, matchup_annotations
         )
         for target in pending:
-            await self._announce(target, key, "Orioles lineup update", embeds)
+            await self._announce(target, [key], "Orioles lineup update", embeds)
+
+    async def _announce_transactions(
+        self,
+        transactions: Sequence[TransactionInfo],
+        targets: list[_AnnouncementTarget],
+        target_date: date,
+    ) -> None:
+        """Post everything new since the last check as a single card.
+
+        Roster moves arrive in matched sets — an option out pays for the recall
+        in — so posting one card per transaction splits a single piece of news
+        across several messages. Each transaction is still marked individually,
+        so a later move on the same day posts alone rather than repeating the
+        ones already sent.
+        """
+        for target in targets:
+            pending = [
+                transaction
+                for transaction in transactions
+                if self.announcement_state.unseen(
+                    channel_key(
+                        transaction_announcement_key(transaction), target.key_id
+                    )
+                )
+            ]
+            if not pending:
+                continue
+            content = (
+                "Orioles roster transaction"
+                if len(pending) == 1
+                else "Orioles roster transactions"
+            )
+            await self._announce(
+                target,
+                [transaction_announcement_key(item) for item in pending],
+                content,
+                transaction_embeds(pending, target_date),
+            )
 
     async def _announcement_targets(
         self, channel_ids: Sequence[int], webhook_urls: Sequence[str]
@@ -285,17 +316,22 @@ class OriolesBot(commands.Bot):
     async def _announce(
         self,
         target: _AnnouncementTarget,
-        key: str,
+        keys: Sequence[str],
         content: str,
         embeds: list[discord.Embed],
     ) -> None:
-        """Post to one target, marking it sent only for that target."""
+        """Post to one target, marking it sent only for that target.
+
+        A card can cover several announcements, so every key it settles is
+        marked together: a partial mark would repost the rest on the next poll.
+        """
         try:
             await target.destination.send(content=content, embeds=embeds)
         except discord.DiscordException as exc:
             LOGGER.warning("Could not post to %s: %s", target.label, exc)
             return
-        self.announcement_state.mark(channel_key(key, target.key_id))
+        for key in keys:
+            self.announcement_state.mark(channel_key(key, target.key_id))
 
     async def _announce_substitutions(
         self,
@@ -336,7 +372,7 @@ class OriolesBot(commands.Bot):
             for target in waiting:
                 await self._announce(
                     target,
-                    key,
+                    [key],
                     f"{substitution.batting_team} substitution",
                     embeds,
                 )
