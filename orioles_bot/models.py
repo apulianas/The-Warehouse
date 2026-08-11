@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import date, datetime
 
@@ -299,6 +300,46 @@ class TransactionPlayer:
     name: str
 
 
+# Wording MLB uses when a move puts a player on the roster rather than takes
+# him off it. Roster moves come in matched sets, and the arriving player is the
+# news, so a card covering several moves leads with his face.
+ARRIVAL_TRANSACTION_PHRASES = (
+    "recalled",
+    "activated",
+    "reinstated",
+    "called up",
+    "selected the contract",
+    "purchased the contract",
+    "claimed off waivers",
+    "signed",
+)
+# The other direction. Checked only after the arrival phrases, so activating a
+# player off the injured list is not read as a departure by "injured list".
+DEPARTURE_TRANSACTION_PHRASES = (
+    "optioned",
+    "designated for assignment",
+    "released",
+    "outright",
+    "outrighted",
+    "injured list",
+    "restricted list",
+    "bereavement list",
+    "paternity list",
+    "granted free agency",
+    "non-tendered",
+    "placed on waivers",
+)
+
+
+def _phrase_pattern(phrases: tuple[str, ...]) -> re.Pattern[str]:
+    """Whole words only: "assigned" and "reassigned" both contain "signed"."""
+    return re.compile(r"\b(?:%s)\b" % "|".join(re.escape(item) for item in phrases))
+
+
+ARRIVAL_TRANSACTION_PATTERN = _phrase_pattern(ARRIVAL_TRANSACTION_PHRASES)
+DEPARTURE_TRANSACTION_PATTERN = _phrase_pattern(DEPARTURE_TRANSACTION_PHRASES)
+
+
 @dataclass(frozen=True)
 class TransactionInfo:
     transaction_id: str
@@ -309,6 +350,26 @@ class TransactionInfo:
     description: str
     headshot_url: str | None
     players: tuple[TransactionPlayer, ...] = ()
+
+    @property
+    def _searchable(self) -> str:
+        return f"{self.type_description} {self.description}".casefold()
+
+    @property
+    def is_arrival(self) -> bool:
+        """Whether this move adds a player to the roster."""
+        return ARRIVAL_TRANSACTION_PATTERN.search(self._searchable) is not None
+
+    @property
+    def is_departure(self) -> bool:
+        """Whether this move takes a player off the roster.
+
+        A trade is neither: it names both directions at once, so claiming it
+        for either side would misread it.
+        """
+        if self.is_arrival:
+            return False
+        return DEPARTURE_TRANSACTION_PATTERN.search(self._searchable) is not None
 
 
 @dataclass(frozen=True)
