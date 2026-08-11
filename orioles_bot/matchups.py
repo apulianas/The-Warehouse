@@ -6,9 +6,10 @@ import io
 import logging
 import urllib.request
 from collections.abc import Callable, Iterable, Mapping
+from datetime import date
 from typing import Any
 
-from .mlb import savant_matchup_params
+from .mlb import savant_hand_window_params, savant_matchup_params
 from .models import GameInfo, MatchupAnnotation, MatchupHistory
 
 
@@ -37,17 +38,27 @@ NON_AT_BAT_EVENTS = {
 }
 
 FetchRecords = Callable[[int, int], Any]
+FetchHandRecords = Callable[[int, str, date, date], Any]
+# A batter, the pitching hand he is facing, and the inclusive days it covers.
+HandWindow = tuple[int, str, date, date]
 STATCAST_MATCHUP_CSV_URL = "https://baseballsavant.mlb.com/statcast_search/csv"
 
 
 class MatchupService:
-    def __init__(self, min_pa: int = 5, fetcher: FetchRecords | None = None) -> None:
+    def __init__(
+        self,
+        min_pa: int = 5,
+        fetcher: FetchRecords | None = None,
+        hand_fetcher: FetchHandRecords | None = None,
+    ) -> None:
         self.min_pa = min_pa
         self._fetcher = fetcher or _fetch_statcast_batter_pitcher
+        self._hand_fetcher = hand_fetcher or _fetch_statcast_batter_hand
         # The full line is cached rather than the hot/cold verdict, so a
         # substitution card can show a matchup too small or too ordinary to
         # earn an emoji without refetching it.
         self._cache: dict[tuple[int, int], MatchupHistory | None] = {}
+        self._hand_cache: dict[HandWindow, MatchupHistory] = {}
         self._lock = asyncio.Lock()
 
     async def fetch_for_games(
@@ -127,6 +138,69 @@ class MatchupService:
                 "Could not fetch matchup data for batter %s vs pitcher %s: %s",
                 batter_id,
                 pitcher_id,
+                exc,
+            )
+            return None
+
+    async def hand_history(
+        self, batter_id: int, throws: str, start: date, end: date
+    ) -> MatchupHistory | None:
+        histories = await self.hand_history_many([(batter_id, throws, start, end)])
+        return histories.get((batter_id, throws, start, end))
+
+    async def hand_history_many(
+        self, windows: Iterable[HandWindow]
+    ) -> dict[HandWindow, MatchupHistory]:
+        """Recent form against one pitching hand, totalled from Statcast.
+
+        The window itself is part of the cache key, so a card posted tomorrow
+        refetches instead of reusing a range that has since rolled forward.
+        """
+        unique_windows = set(windows)
+        if not unique_windows:
+            return {}
+
+        async with self._lock:
+            missing = [
+                window for window in unique_windows if window not in self._hand_cache
+            ]
+
+        if missing:
+            fetched = await asyncio.gather(
+                *(self._fetch_hand_window(*window) for window in missing)
+            )
+            async with self._lock:
+                for window, history in zip(missing, fetched, strict=True):
+                    # As with a pair, a failed fetch is left uncached so a
+                    # transient Statcast outage does not stick to the window.
+                    if history is not None:
+                        self._hand_cache.setdefault(window, history)
+
+        async with self._lock:
+            return {
+                window: history
+                for window in unique_windows
+                if (history := self._hand_cache.get(window)) is not None
+            }
+
+    async def _fetch_hand_window(
+        self, batter_id: int, throws: str, start: date, end: date
+    ) -> MatchupHistory | None:
+        try:
+            data = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self._hand_fetcher, batter_id, throws, start, end
+                ),
+                timeout=MATCHUP_FETCH_TIMEOUT_SECONDS,
+            )
+            return calculate_matchup_history(_records_from_data(data))
+        except Exception as exc:  # noqa: BLE001 - recent form is a nicety, not a reason to drop the card.
+            LOGGER.info(
+                "Could not fetch %s-handed form for batter %s from %s to %s: %s",
+                throws,
+                batter_id,
+                start,
+                end,
                 exc,
             )
             return None
@@ -259,8 +333,20 @@ def _records_from_data(data: Any) -> list[Mapping[str, Any]]:
 
 
 def _fetch_statcast_batter_pitcher(batter_id: int, pitcher_id: int) -> Any:
+    return _fetch_statcast_csv(statcast_matchup_csv_url(batter_id, pitcher_id))
+
+
+def _fetch_statcast_batter_hand(
+    batter_id: int, throws: str, start: date, end: date
+) -> Any:
+    return _fetch_statcast_csv(
+        statcast_hand_window_csv_url(batter_id, throws, start, end)
+    )
+
+
+def _fetch_statcast_csv(url: str) -> Any:
     request = urllib.request.Request(
-        statcast_matchup_csv_url(batter_id, pitcher_id),
+        url,
         headers={"User-Agent": "orioles-discord-bot"},
     )
     with urllib.request.urlopen(request, timeout=MATCHUP_FETCH_TIMEOUT_SECONDS) as response:
@@ -270,6 +356,13 @@ def _fetch_statcast_batter_pitcher(batter_id: int, pitcher_id: int) -> Any:
 
 def statcast_matchup_csv_url(batter_id: int | str, pitcher_id: int | str) -> str:
     return f"{STATCAST_MATCHUP_CSV_URL}?{savant_matchup_params(batter_id, pitcher_id)}"
+
+
+def statcast_hand_window_csv_url(
+    batter_id: int | str, throws: str, start: date, end: date
+) -> str:
+    params = savant_hand_window_params(batter_id, throws, start, end)
+    return f"{STATCAST_MATCHUP_CSV_URL}?{params}"
 
 
 def _clean_event(value: Any) -> str | None:
