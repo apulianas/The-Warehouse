@@ -14,7 +14,7 @@ A Dockerized Python 3.12 Discord bot that posts Baltimore Orioles lineups, roste
 - Discord embeds with game status, venue, score when available, both batting orders, positions, both starting pitchers, transaction details, and hot/cold matchup emojis with the underlying wOBA and plate appearances when enough history exists.
 - Every player name — batters, both starters, and everyone named in a transaction — links to their Baseball Savant player page. Multi-player trades link all sides, not just the headliner, and post as a single entry instead of once per player.
 - Roster moves found in the same check post as a single message, so a matched set — an option out and the recall it pays for — arrives as one announcement rather than one per move. The card is sorted into "Joining the roster", "Leaving the roster", and "Other moves" for trades, since MLB's feed interleaves them.
-- A lone move keeps its full-width headshot. When several players join at once, each gets his own card with a thumbnail, so no arriving player goes unpictured and the post still fits a phone screen.
+- A lone move keeps a thumbnail rather than a full-width headshot, so no roster post fills a phone screen. When several players join at once, each gets his own card with a thumbnail, so no arriving player goes unpictured.
 - Each batting order links to the Baseball Savant Player Matchup page for that lineup versus the opposing starter, showing every hitter's career history against him.
 - Each lineup embed also links to the Statcast game preview for that game.
 - Batter-versus-pitcher summaries are fetched from Baseball Savant and rendered inline, so the hot/cold read is visible without leaving Discord.

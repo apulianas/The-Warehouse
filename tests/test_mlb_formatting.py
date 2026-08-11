@@ -51,9 +51,7 @@ def test_headshot_url_uses_mlb_static_template() -> None:
 
 
 def test_headshot_url_accepts_a_larger_width() -> None:
-    from orioles_bot.mlb import HEADSHOT_FEATURE_WIDTH
-
-    assert "w_426,q_auto:good" in headshot_url(12345, HEADSHOT_FEATURE_WIDTH)
+    assert "w_426,q_auto:good" in headshot_url(12345, 426)
 
 
 def test_headshot_url_always_requests_a_default_image() -> None:
