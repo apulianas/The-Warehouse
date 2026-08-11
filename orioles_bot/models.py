@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import date, datetime
 
@@ -299,6 +300,26 @@ class TransactionPlayer:
     name: str
 
 
+# Wording MLB uses when a move puts a player on the roster rather than takes
+# him off it. Roster moves come in matched sets, and the arriving player is the
+# news, so a card covering several moves leads with his face.
+ARRIVAL_TRANSACTION_PHRASES = (
+    "recalled",
+    "activated",
+    "reinstated",
+    "called up",
+    "selected the contract",
+    "purchased the contract",
+    "claimed off waivers",
+    "signed",
+)
+# Whole words only: "assigned" and "reassigned" both contain "signed", and a
+# rehab assignment is not a call-up.
+ARRIVAL_TRANSACTION_PATTERN = re.compile(
+    r"\b(?:%s)\b" % "|".join(re.escape(phrase) for phrase in ARRIVAL_TRANSACTION_PHRASES)
+)
+
+
 @dataclass(frozen=True)
 class TransactionInfo:
     transaction_id: str
@@ -309,6 +330,17 @@ class TransactionInfo:
     description: str
     headshot_url: str | None
     players: tuple[TransactionPlayer, ...] = ()
+
+    @property
+    def is_arrival(self) -> bool:
+        """Whether this move adds a player to the roster.
+
+        Departures — options, injured list placements, designations — carry
+        none of these phrases, and a trade names both directions, so neither
+        wins the headshot away from an actual call-up.
+        """
+        text = f"{self.type_description} {self.description}".casefold()
+        return ARRIVAL_TRANSACTION_PATTERN.search(text) is not None
 
 
 @dataclass(frozen=True)
