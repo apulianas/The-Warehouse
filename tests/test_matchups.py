@@ -288,7 +288,8 @@ def _txn(tid: str, player_id, players, name="Coby Mayo"):
     )
 
 
-def test_single_player_transaction_gets_a_large_headshot() -> None:
+def test_single_player_transaction_keeps_a_thumbnail() -> None:
+    """A full-width headshot takes up most of a phone screen on its own."""
     from orioles_bot.embeds import transaction_embeds
     from orioles_bot.models import TransactionPlayer
 
@@ -297,9 +298,8 @@ def test_single_player_transaction_gets_a_large_headshot() -> None:
         _txn("1", 683002, ()).date,
     )[0].to_dict()
 
-    assert payload["image"]["url"].endswith("/people/683002/headshot/67/current")
-    assert "w_426" in payload["image"]["url"]
-    assert "thumbnail" not in payload
+    assert "image" not in payload
+    assert payload["thumbnail"]["url"] == "thumb-683002"
 
 
 def test_multi_player_transaction_keeps_a_thumbnail() -> None:

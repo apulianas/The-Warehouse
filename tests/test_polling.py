@@ -587,7 +587,8 @@ def test_a_grouped_card_shows_the_arriving_player(tmp_path) -> None:
     assert payload["thumbnail"]["url"] == headshot_url(SANDERS_ID)
 
 
-def test_a_lone_move_still_gets_the_full_width_photo(tmp_path) -> None:
+def test_a_lone_move_keeps_a_thumbnail(tmp_path) -> None:
+    """No post should fill a phone screen, however few moves it covers."""
     bot, destination, _ = _transaction_bot(tmp_path, [RECALLED])
 
     _poll(bot)
@@ -595,8 +596,8 @@ def test_a_lone_move_still_gets_the_full_width_photo(tmp_path) -> None:
     content, embeds = destination.sent[0]
     assert content == "Orioles roster transaction"
     payload = embeds[0].to_dict()  # type: ignore[attr-defined]
-    assert "w_426" in payload["image"]["url"]
-    assert "thumbnail" not in payload
+    assert "image" not in payload
+    assert payload["thumbnail"]["url"] == headshot_url(SANDERS_ID)
 
 
 def test_a_later_move_does_not_repeat_the_ones_already_posted(tmp_path) -> None:

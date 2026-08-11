@@ -39,7 +39,6 @@ from .formatting import (
     format_wild_card,
 )
 from .mlb import (
-    HEADSHOT_FEATURE_WIDTH,
     headshot_url,
     savant_player_url,
     savant_preview_url,
@@ -353,18 +352,13 @@ def _pack_field_values(lines: Sequence[str], max_chars: int = 1024) -> list[str]
 def _set_transaction_art(
     embed: discord.Embed, transactions: Sequence[TransactionInfo]
 ) -> None:
-    """Show a large headshot when the post is about one specific player.
+    """Show the arriving player's face, small.
 
-    A lone call-up gets a full-width photo. A multi-player trade or a card
-    covering several moves falls back to a thumbnail, where a single face would
-    misrepresent the post, and that thumbnail shows the arriving player: in a
-    paired option-out/recall-in the player joining the roster is the news.
+    In a paired option-out/recall-in the player joining the roster is the news.
+    It stays a thumbnail whatever the card covers: a full-width headshot takes
+    up most of a phone screen on its own, and a card can hold only one anyway,
+    so a lone move earns no more room than the rest.
     """
-    solo = transactions[0] if len(transactions) == 1 else None
-    if solo is not None and solo.player_id is not None and len(solo.players) <= 1:
-        embed.set_image(url=headshot_url(solo.player_id, HEADSHOT_FEATURE_WIDTH))
-        return
-
     # `sorted` is stable, so arrivals keep their posted order among themselves.
     arrivals_first = sorted(transactions, key=lambda item: not item.is_arrival)
     first_headshot = next(
