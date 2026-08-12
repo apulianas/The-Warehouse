@@ -8,6 +8,13 @@ import discord
 
 from .formatting import (
     WILD_CARD_SPOTS,
+    format_at_bat_heading,
+    format_at_bat_pitcher,
+    format_at_bat_slots,
+    format_count,
+    format_no_at_bat,
+    format_no_live_game,
+    format_runners,
     HAND_NAMES,
     format_game_time,
     format_game_title,
@@ -17,6 +24,7 @@ from .formatting import (
     format_matchup_history,
     format_no_games,
     format_no_player_stats,
+    format_no_relievers,
     format_no_scheduled_games,
     format_no_standings,
     format_no_transactions,
@@ -35,6 +43,9 @@ from .formatting import (
     format_substitution_headline,
     format_substitution_pitcher,
     format_recent_hand_split,
+    format_reliever,
+    format_bullpen_window,
+    RELIEVER_SECTION_LABELS,
     format_running_profile,
     format_transaction,
     format_wild_card,
@@ -59,6 +70,9 @@ from .models import (
     PlayerRef,
     RECENT_SPLIT_DAYS,
     RECENT_SPLIT_HANDS,
+    BULLPEN_WORKLOAD_DAYS,
+    AtBatState,
+    RelieverStatus,
     RunningProfile,
     ScheduleWindow,
     StatsWindow,
@@ -126,8 +140,11 @@ def lineup_embeds(
         preview_link = f"[Statcast game preview]({savant_preview_url(game.game_pk)})"
         body = (
             f"{header}\n\n"
-            f"{orioles_heading}\n{orioles_lineup}\n\n"
-            f"{opponent_heading}\n{opponent_lineup}"
+            # Discord swallows the break between a heading line and a numbered
+            # list unless a blank line separates them, so the first batter would
+            # otherwise run on from the matchup link.
+            f"{orioles_heading}\n\n{orioles_lineup}\n\n"
+            f"{opponent_heading}\n\n{opponent_lineup}"
         )
         suffix = f"\n\n{preview_link}"
         description = f"{_limit_description(body, 4096 - len(suffix))}{suffix}"
@@ -552,6 +569,91 @@ def schedule_embeds(    games: Sequence[GameInfo], window: ScheduleWindow, time_
     return [embed]
 
 
+def on_deck_embed(state: AtBatState, game: GameInfo) -> discord.Embed:
+    """Who is at bat, on deck, and in the hole, with the situation around them."""
+    if state.is_empty:
+        embed = discord.Embed(
+            title="Orioles on deck",
+            description=format_no_at_bat(game),
+            color=ORIOLES_ORANGE,
+        )
+        embed.set_thumbnail(url=team_logo_url(ORIOLES_TEAM_ID))
+        embed.set_footer(text="Data: public MLB Stats API")
+        return embed
+
+    sections = [
+        section
+        for section in (
+            format_at_bat_slots(state),
+            format_at_bat_pitcher(state),
+            format_runners(state),
+        )
+        if section
+    ]
+    embed = discord.Embed(
+        title=format_game_title(game),
+        url=savant_preview_url(game.game_pk),
+        description=_limit_description("\n\n".join(sections)),
+        color=ORIOLES_ORANGE,
+    )
+    embed.set_author(name=format_at_bat_heading(state))
+    if state.batter is not None:
+        embed.set_thumbnail(url=headshot_url(state.batter.player_id))
+    else:
+        embed.set_thumbnail(url=team_logo_url(ORIOLES_TEAM_ID))
+    count = format_count(state)
+    embed.set_footer(
+        text=f"{count} • Data: public MLB Stats API"
+        if count
+        else "Data: public MLB Stats API"
+    )
+    return embed
+
+
+def no_live_game_embed(target_date: date) -> discord.Embed:
+    embed = discord.Embed(
+        title="Orioles on deck",
+        description=format_no_live_game(target_date),
+        color=ORIOLES_ORANGE,
+    )
+    embed.set_thumbnail(url=team_logo_url(ORIOLES_TEAM_ID))
+    embed.set_footer(text="Data: public MLB Stats API")
+    return embed
+
+
+def bullpen_embed(
+    relievers: Sequence[RelieverStatus],
+    workload_days: int = BULLPEN_WORKLOAD_DAYS,
+) -> discord.Embed:
+    """The bullpen graded by recent usage, grouped by how usable each arm is."""
+    embed = discord.Embed(
+        title="Orioles bullpen",
+        description=format_bullpen_window(workload_days),
+        color=ORIOLES_ORANGE,
+    )
+    embed.set_thumbnail(url=team_logo_url(ORIOLES_TEAM_ID))
+    if not relievers:
+        embed.description = format_no_relievers()
+        embed.set_footer(text="Data: public MLB Stats API")
+        return embed
+
+    for availability, label in RELIEVER_SECTION_LABELS:
+        group = [
+            status for status in relievers if status.availability == availability
+        ]
+        if not group:
+            continue
+        lines = [format_reliever(status) for status in group]
+        for index, chunk in enumerate(_pack_field_values(lines)):
+            embed.add_field(
+                name=f"{label} ({len(group)})" if index == 0 else BLANK_FIELD_NAME,
+                value=chunk,
+                inline=False,
+            )
+    embed.set_footer(text="Data: public MLB Stats API")
+    return embed
+
+
 def help_embed() -> discord.Embed:
     embed = discord.Embed(
         title="Orioles bot help",
@@ -594,6 +696,24 @@ def help_embed() -> discord.Embed:
         value=(
             "Show upcoming Orioles games over the next N days (default 7, max 30) "
             "with opponent, start time, and probable starters."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="/ondeck",
+        value=(
+            "Show who is at bat, on deck, and in the hole in the Orioles game "
+            "being played right now, with the count, outs, runners, and the "
+            "pitcher facing them."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="/bullpen",
+        value=(
+            "Show which Orioles relievers are available, judged from their "
+            "usage over the last few days — who threw today, who is on a "
+            "back-to-back, and how much rest everyone else has."
         ),
         inline=False,
     )
