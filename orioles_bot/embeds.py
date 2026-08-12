@@ -140,8 +140,11 @@ def lineup_embeds(
         preview_link = f"[Statcast game preview]({savant_preview_url(game.game_pk)})"
         body = (
             f"{header}\n\n"
-            f"{orioles_heading}\n{orioles_lineup}\n\n"
-            f"{opponent_heading}\n{opponent_lineup}"
+            # Discord swallows the break between a heading line and a numbered
+            # list unless a blank line separates them, so the first batter would
+            # otherwise run on from the matchup link.
+            f"{orioles_heading}\n\n{orioles_lineup}\n\n"
+            f"{opponent_heading}\n\n{opponent_lineup}"
         )
         suffix = f"\n\n{preview_link}"
         description = f"{_limit_description(body, 4096 - len(suffix))}{suffix}"
