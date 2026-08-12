@@ -17,6 +17,7 @@ from .formatting import (
     format_matchup_history,
     format_no_games,
     format_no_player_stats,
+    format_no_relievers,
     format_no_scheduled_games,
     format_no_standings,
     format_no_transactions,
@@ -35,6 +36,9 @@ from .formatting import (
     format_substitution_headline,
     format_substitution_pitcher,
     format_recent_hand_split,
+    format_reliever,
+    format_bullpen_window,
+    RELIEVER_SECTION_LABELS,
     format_running_profile,
     format_transaction,
     format_wild_card,
@@ -59,6 +63,8 @@ from .models import (
     PlayerRef,
     RECENT_SPLIT_DAYS,
     RECENT_SPLIT_HANDS,
+    BULLPEN_WORKLOAD_DAYS,
+    RelieverStatus,
     RunningProfile,
     ScheduleWindow,
     StatsWindow,
@@ -552,6 +558,39 @@ def schedule_embeds(    games: Sequence[GameInfo], window: ScheduleWindow, time_
     return [embed]
 
 
+def bullpen_embed(
+    relievers: Sequence[RelieverStatus],
+    workload_days: int = BULLPEN_WORKLOAD_DAYS,
+) -> discord.Embed:
+    """The bullpen graded by recent usage, grouped by how usable each arm is."""
+    embed = discord.Embed(
+        title="Orioles bullpen",
+        description=format_bullpen_window(workload_days),
+        color=ORIOLES_ORANGE,
+    )
+    embed.set_thumbnail(url=team_logo_url(ORIOLES_TEAM_ID))
+    if not relievers:
+        embed.description = format_no_relievers()
+        embed.set_footer(text="Data: public MLB Stats API")
+        return embed
+
+    for availability, label in RELIEVER_SECTION_LABELS:
+        group = [
+            status for status in relievers if status.availability == availability
+        ]
+        if not group:
+            continue
+        lines = [format_reliever(status) for status in group]
+        for index, chunk in enumerate(_pack_field_values(lines)):
+            embed.add_field(
+                name=f"{label} ({len(group)})" if index == 0 else BLANK_FIELD_NAME,
+                value=chunk,
+                inline=False,
+            )
+    embed.set_footer(text="Data: public MLB Stats API")
+    return embed
+
+
 def help_embed() -> discord.Embed:
     embed = discord.Embed(
         title="Orioles bot help",
@@ -594,6 +633,15 @@ def help_embed() -> discord.Embed:
         value=(
             "Show upcoming Orioles games over the next N days (default 7, max 30) "
             "with opponent, start time, and probable starters."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="/bullpen",
+        value=(
+            "Show which Orioles relievers are available, judged from their "
+            "usage over the last few days — who threw today, who is on a "
+            "back-to-back, and how much rest everyone else has."
         ),
         inline=False,
     )

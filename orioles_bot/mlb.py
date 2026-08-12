@@ -311,9 +311,15 @@ class MlbClient:
         )
         return parse_player_stats(data)
 
-    async def fetch_player_pitching_games(
+    async def fetch_pitching_game_log(
         self, player_id: int, window: StatsWindow
     ) -> tuple[PitchingGame, ...]:
+        """A pitcher's outings in the window, without the score lookup.
+
+        Bullpen availability only needs the workload, so the extra schedule
+        request that decorates a game log with final scores is skipped; over a
+        whole pitching staff that halves the requests a single command makes.
+        """
         data = await self._get_json(
             f"/people/{player_id}/stats",
             {
@@ -324,7 +330,12 @@ class MlbClient:
                 "sportId": 1,
             },
         )
-        games = parse_pitching_game_logs(data)
+        return parse_pitching_game_logs(data)
+
+    async def fetch_player_pitching_games(
+        self, player_id: int, window: StatsWindow
+    ) -> tuple[PitchingGame, ...]:
+        games = await self.fetch_pitching_game_log(player_id, window)
         team_ids = {game.team_id for game in games if game.team_id is not None}
         if not team_ids:
             return games
@@ -1420,7 +1431,23 @@ def parse_pitching_split(stat: dict[str, Any]) -> PitchingSplit:
         strikeouts=_stat_int(stat, "strikeOuts"),
         era=_stat_float(stat, "era"),
         whip=_stat_float(stat, "whip"),
+        pitches=_pitch_count(stat),
+        batters_faced=_stat_int(stat, "battersFaced"),
     )
+
+
+def _pitch_count(stat: dict[str, Any]) -> int:
+    """Pitches thrown, however this response spells it.
+
+    Game logs carry ``numberOfPitches`` while some season splits use
+    ``pitchesThrown``; either is the same number, and an absent one reads as
+    zero so a missing count never inflates a workload.
+    """
+    for key in ("numberOfPitches", "pitchesThrown"):
+        count = _stat_int(stat, key)
+        if count:
+            return count
+    return 0
 
 
 def _stat_int(stat: dict[str, Any], key: str) -> int:

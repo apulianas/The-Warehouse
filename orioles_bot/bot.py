@@ -13,6 +13,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
+from .bullpen import BullpenService
 from .cache import AsyncTtlCache
 from .config import BotConfig, load_config, webhook_id
 from .dates import (
@@ -27,6 +28,7 @@ from .dates import (
     today_in_zone,
 )
 from .embeds import (
+    bullpen_embed,
     error_embed,
     help_embed,
     lineup_embeds,
@@ -42,6 +44,7 @@ from .matchups import MatchupService
 from .mlb import MlbApiError, MlbClient
 from .models import (
     AL_EAST_DIVISION_ID,
+    BULLPEN_WORKLOAD_DAYS,
     DivisionStandings,
     GameInfo,
     HittingSplit,
@@ -49,6 +52,7 @@ from .models import (
     NextGame,
     RECENT_SPLIT_DAYS,
     RECENT_SPLIT_HANDS,
+    RelieverStatus,
     RunningProfile,
     Substitution,
     TransactionInfo,
@@ -67,6 +71,9 @@ DEFAULT_SCHEDULE_DAYS = 7
 # few minutes of staleness is invisible while sparing the API a request per use.
 STANDINGS_TTL_SECONDS = 300
 SCHEDULE_TTL_SECONDS = 300
+# A bullpen card costs one request per pitcher, and usage only moves when
+# someone warms up, so a few minutes of staleness is a cheap trade.
+BULLPEN_TTL_SECONDS = 300
 StatsDays = app_commands.Range[
     int, MIN_STATS_WINDOW_DAYS, MAX_STATS_WINDOW_DAYS
 ]
@@ -104,6 +111,10 @@ class OriolesBot(commands.Bot):
         self.matchups = MatchupService(config.matchup_min_pa)
         self.sprint_speed = SprintSpeedService()
         self.player_stats = PlayerStatsService()
+        self.bullpen = BullpenService()
+        self.bullpen_cache: AsyncTtlCache[str, tuple[RelieverStatus, ...]] = (
+            AsyncTtlCache(BULLPEN_TTL_SECONDS)
+        )
         self.standings_cache: AsyncTtlCache[int, StandingsPayload] = AsyncTtlCache(
             STANDINGS_TTL_SECONDS
         )
@@ -128,6 +139,7 @@ class OriolesBot(commands.Bot):
         self.tree.add_command(_player_stats_command(self))
         self.tree.add_command(_standings_command(self))
         self.tree.add_command(_schedule_command(self))
+        self.tree.add_command(_bullpen_command(self))
         self.tree.add_command(_help_command())
         await self.tree.sync()
         if self.config.has_announcement_targets:
@@ -762,6 +774,31 @@ def _schedule_command(bot: OriolesBot) -> app_commands.Command[Any, ..., None]:
         )
 
     return schedule
+
+
+def _bullpen_command(bot: OriolesBot) -> app_commands.Command[Any, ..., None]:
+    @app_commands.command(
+        name="bullpen",
+        description="Show which Orioles relievers are available, from recent usage.",
+    )
+    async def bullpen(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+        client = _require_mlb(bot)
+        today = today_in_zone(bot.config.time_zone)
+        try:
+            relievers = await bot.bullpen_cache.get_or_fetch(
+                today.isoformat(),
+                lambda: bot.bullpen.relievers(client, today),
+            )
+        except MlbApiError as exc:
+            await interaction.followup.send(embed=error_embed(str(exc)), ephemeral=True)
+            return
+
+        await interaction.followup.send(
+            embed=bullpen_embed(relievers, BULLPEN_WORKLOAD_DAYS)
+        )
+
+    return bullpen
 
 
 def _help_command() -> app_commands.Command[Any, ..., None]:

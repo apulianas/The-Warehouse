@@ -10,6 +10,7 @@ A Dockerized Python 3.12 Discord bot that posts Baltimore Orioles lineups, roste
   - `/playerstats <player> [days]` — a player's hitting and pitching totals over the last N days.
   - `/standings [view]` — the AL wild card race and the AL East, each with next opponents.
   - `/schedule [days]` — upcoming Orioles games over the next N days.
+  - `/bullpen` — which relievers are available, judged from their recent usage.
   - `/help` — command help.
 - Discord embeds with game status, venue, score when available, both batting orders, positions, both starting pitchers, transaction details, and hot/cold matchup emojis with the underlying wOBA and plate appearances when enough history exists.
 - Every player name — batters, both starters, and everyone named in a transaction — links to their Baseball Savant player page. Multi-player trades link all sides, not just the headliner, and post as a single entry instead of once per player.
@@ -36,6 +37,14 @@ A Dockerized Python 3.12 Discord bot that posts Baltimore Orioles lineups, roste
 - `/schedule` lists upcoming games with opponent, start time, and both probable starters.
   The window defaults to the next 7 days and accepts 1 through 30. A game that has already
   finished shows its final score instead of probable starters.
+- `/bullpen` grades every reliever on the active roster from his game log: pitching
+  today or on back-to-back days reads as unavailable, heavy work the day before as a
+  caution, and anything else as available, with the days of rest and the innings, pitch
+  count, and batters faced of each recent outing shown underneath. Rotation arms are left
+  out, judged by how a pitcher has been used over the last month rather than by any single
+  appearance. MLB publishes no availability list, so this is an inference from usage, not
+  an official status. The card is cached for a few minutes, since it costs one request per
+  pitcher.
 - Standings and schedules are served from a short-lived TTL cache that collapses
   concurrent lookups into one request, so a burst of commands does not multiply API calls.
 - Background polling for today's lineup and transaction updates.
@@ -178,6 +187,7 @@ After inviting the bot, slash commands are synced globally when the bot starts. 
 /lineup date:2026-08-06
 /transactions
 /transactions date:2026-08-06
+/bullpen
 /help
 ```
 

@@ -431,6 +431,8 @@ class PitchingSplit:
     strikeouts: int = 0
     era: float | None = None
     whip: float | None = None
+    pitches: int = 0
+    batters_faced: int = 0
 
 
 @dataclass(frozen=True)
@@ -445,6 +447,46 @@ class PitchingGame:
     team_id: int | None = None
     team_score: int | None = None
     opponent_score: int | None = None
+
+
+# How far back a reliever's game log is pulled. Long enough to tell a starter
+# from a reliever by how he has been used, short enough to stay one request.
+BULLPEN_LOG_DAYS = 30
+# Only the last few days shape availability: a bullpen arm is judged on the
+# work he has not yet recovered from, not on the whole month.
+BULLPEN_WORKLOAD_DAYS = 3
+# A back-to-back outing this heavy is what usually costs a reliever the day.
+BULLPEN_HEAVY_PITCHES = 30
+BULLPEN_HEAVY_INNINGS = 2.0
+
+RELIEVER_AVAILABLE = "available"
+RELIEVER_CAUTION = "caution"
+RELIEVER_UNAVAILABLE = "unavailable"
+RELIEVER_UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class RelieverStatus:
+    """One bullpen arm, with the recent work behind his availability read.
+
+    ``availability`` is a judgement from the game log, not an official status:
+    MLB publishes no availability feed, so recent workload is the only public
+    signal for who can pitch tonight.
+    """
+
+    player: PlayerRef
+    availability: str
+    reason: str
+    outings: tuple[PitchingGame, ...] = ()
+    days_rest: int | None = None
+
+    @property
+    def last_outing(self) -> PitchingGame | None:
+        return self.outings[0] if self.outings else None
+
+    @property
+    def is_available(self) -> bool:
+        return self.availability == RELIEVER_AVAILABLE
 
 
 @dataclass(frozen=True)

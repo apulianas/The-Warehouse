@@ -19,6 +19,11 @@ from .models import (
     PitchingSplit,
     PlayerRef,
     RECENT_SPLIT_DAYS,
+    RELIEVER_AVAILABLE,
+    RELIEVER_CAUTION,
+    RELIEVER_UNAVAILABLE,
+    RELIEVER_UNKNOWN,
+    RelieverStatus,
     RunningProfile,
     ScheduleWindow,
     StatsWindow,
@@ -395,6 +400,62 @@ def format_stats_window(window: StatsWindow) -> str:
 def format_player_heading(player: PlayerRef) -> str:
     name = f"[{player.name}]({savant_player_url(player.player_id)})"
     return f"{name} ({player.position})" if player.position else name
+
+
+RELIEVER_MARKERS = {
+    RELIEVER_AVAILABLE: "🟢",
+    RELIEVER_CAUTION: "🟡",
+    RELIEVER_UNAVAILABLE: "🔴",
+    RELIEVER_UNKNOWN: "⚪",
+}
+RELIEVER_SECTION_LABELS = (
+    (RELIEVER_AVAILABLE, "Available"),
+    (RELIEVER_CAUTION, "Use with caution"),
+    (RELIEVER_UNAVAILABLE, "Unavailable"),
+    (RELIEVER_UNKNOWN, "Workload unknown"),
+)
+
+
+def format_reliever(status: RelieverStatus) -> str:
+    """One bullpen line: the read, then the usage it was read from."""
+    marker = RELIEVER_MARKERS.get(status.availability, "⚪")
+    line = f"{marker} {format_player_heading(status.player)} — {status.reason}"
+    usage = format_reliever_usage(status)
+    return f"{line}\n{usage}" if usage else line
+
+
+def format_reliever_usage(status: RelieverStatus) -> str:
+    if not status.outings:
+        return ""
+    return "Recent: " + "; ".join(
+        format_reliever_outing(outing) for outing in status.outings
+    )
+
+
+def format_reliever_outing(outing: PitchingGame) -> str:
+    location = "vs" if outing.is_home else "at"
+    stat = outing.stat
+    details = [f"{format_innings(stat.innings_pitched)} IP"]
+    if stat.pitches:
+        details.append(f"{stat.pitches} P")
+    if stat.batters_faced:
+        details.append(f"{stat.batters_faced} BF")
+    return (
+        f"{outing.game_date:%b %-d} {location} {outing.opponent} "
+        f"({', '.join(details)})"
+    )
+
+
+def format_bullpen_window(workload_days: int) -> str:
+    day_label = "day" if workload_days == 1 else "days"
+    return (
+        "Availability is inferred from each reliever's usage over the last "
+        f"{workload_days} {day_label}. MLB publishes no availability list."
+    )
+
+
+def format_no_relievers() -> str:
+    return "No relievers found on the active roster."
 
 
 def format_hitting_split(split: HittingSplit) -> str:
