@@ -18,6 +18,7 @@ from .models import (
     PitchingGame,
     PitchingSplit,
     PlayerRef,
+    AtBatState,
     RECENT_SPLIT_DAYS,
     RELIEVER_AVAILABLE,
     RELIEVER_CAUTION,
@@ -142,6 +143,85 @@ def _format_matchup_metric(annotation: MatchupAnnotation) -> str:
     if value.startswith("0"):
         value = value[1:]
     return f"{value} {annotation.metric_name}, {annotation.plate_appearances} PA"
+
+
+def format_at_bat_heading(state: AtBatState) -> str:
+    """The half inning and the team hitting in it."""
+    return f"{format_half_inning(state)} — {state.batting_team} batting"
+
+
+def format_half_inning(state: AtBatState) -> str:
+    if state.inning is None:
+        return "Inning unknown"
+    half = state.inning_state or ("Top" if state.is_top_inning else "Bottom")
+    return f"{half} {format_ordinal(state.inning)}"
+
+
+def format_ordinal(value: int) -> str:
+    """1st, 2nd, 3rd, 4th — with the teens spelled the way English does."""
+    if 10 <= value % 100 <= 20:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(value % 10, "th")
+    return f"{value}{suffix}"
+
+
+def format_count(state: AtBatState) -> str:
+    parts: list[str] = []
+    if state.balls is not None and state.strikes is not None:
+        parts.append(f"{state.balls}-{state.strikes} count")
+    if state.outs is not None:
+        out_label = "out" if state.outs == 1 else "outs"
+        parts.append(f"{state.outs} {out_label}")
+    return ", ".join(parts)
+
+
+def format_runners(state: AtBatState) -> str:
+    runners = state.runners
+    if not runners:
+        return "Bases empty"
+    return "On base: " + ", ".join(
+        f"{base} {format_player_link(runner)}" for base, runner in runners
+    )
+
+
+def format_player_link(player: PlayerRef) -> str:
+    return f"[{player.name}]({savant_player_url(player.player_id)})"
+
+
+AT_BAT_SLOT_LABELS = ("At bat", "On deck", "In the hole")
+
+
+def format_at_bat_slots(state: AtBatState) -> str:
+    """The next three hitters, labelled, skipping any MLB has not named yet."""
+    lines = [
+        f"**{label}** — {format_player_link(player)}"
+        for label, player in zip(
+            AT_BAT_SLOT_LABELS, (state.batter, state.on_deck, state.in_hole)
+        )
+        if player is not None
+    ]
+    return "\n".join(lines)
+
+
+def format_at_bat_pitcher(state: AtBatState) -> str:
+    if state.pitcher is None:
+        return ""
+    return f"**Pitching** — {format_player_link(state.pitcher)}"
+
+
+def format_no_live_game(target_date: date) -> str:
+    return (
+        f"No {ORIOLES_TEAM_NAME} game is in progress. "
+        f"Try /lineup for {target_date:%B %-d, %Y}."
+    )
+
+
+def format_no_at_bat(game: GameInfo) -> str:
+    return (
+        f"{game.away_team} at {game.home_team} is underway, but MLB has not "
+        "posted the current at-bat yet."
+    )
 
 
 def format_no_games(target_date: date) -> str:

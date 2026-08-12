@@ -30,6 +30,8 @@ from .dates import (
 from .embeds import (
     bullpen_embed,
     error_embed,
+    no_live_game_embed,
+    on_deck_embed,
     help_embed,
     lineup_embeds,
     player_stats_embeds,
@@ -140,6 +142,7 @@ class OriolesBot(commands.Bot):
         self.tree.add_command(_standings_command(self))
         self.tree.add_command(_schedule_command(self))
         self.tree.add_command(_bullpen_command(self))
+        self.tree.add_command(_on_deck_command(self))
         self.tree.add_command(_help_command())
         await self.tree.sync()
         if self.config.has_announcement_targets:
@@ -799,6 +802,39 @@ def _bullpen_command(bot: OriolesBot) -> app_commands.Command[Any, ..., None]:
         )
 
     return bullpen
+
+
+def _on_deck_command(bot: OriolesBot) -> app_commands.Command[Any, ..., None]:
+    @app_commands.command(
+        name="ondeck",
+        description="Show who is at bat, on deck, and in the hole right now.",
+    )
+    async def ondeck(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+        client = _require_mlb(bot)
+        today = today_in_zone(bot.config.time_zone)
+        try:
+            games = await client.fetch_games(today)
+        except MlbApiError as exc:
+            await interaction.followup.send(embed=error_embed(str(exc)), ephemeral=True)
+            return
+
+        # The at-bat only exists while a game is being played, and a
+        # doubleheader can have one finished and one underway.
+        live = next((game for game in games if game.is_in_progress), None)
+        if live is None:
+            await interaction.followup.send(embed=no_live_game_embed(today))
+            return
+
+        try:
+            state = await client.fetch_linescore(live)
+        except MlbApiError as exc:
+            await interaction.followup.send(embed=error_embed(str(exc)), ephemeral=True)
+            return
+
+        await interaction.followup.send(embed=on_deck_embed(state, live))
+
+    return ondeck
 
 
 def _help_command() -> app_commands.Command[Any, ..., None]:

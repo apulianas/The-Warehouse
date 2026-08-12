@@ -490,6 +490,54 @@ class RelieverStatus:
 
 
 @dataclass(frozen=True)
+class AtBatState:
+    """Who is hitting, who is next, and the situation they walk into.
+
+    Built from the live linescore rather than the boxscore, because the on-deck
+    and in-the-hole slots only exist while a game is being played.
+    """
+
+    game_pk: int
+    batting_team: str
+    batting_team_id: int | None
+    is_top_inning: bool
+    inning: int | None = None
+    inning_state: str = ""
+    outs: int | None = None
+    balls: int | None = None
+    strikes: int | None = None
+    batter: PlayerRef | None = None
+    on_deck: PlayerRef | None = None
+    in_hole: PlayerRef | None = None
+    pitcher: PlayerRef | None = None
+    runner_on_first: PlayerRef | None = None
+    runner_on_second: PlayerRef | None = None
+    runner_on_third: PlayerRef | None = None
+
+    @property
+    def orioles_batting(self) -> bool:
+        return self.batting_team_id == ORIOLES_TEAM_ID
+
+    @property
+    def runners(self) -> tuple[tuple[str, PlayerRef], ...]:
+        """Occupied bases, from third so the go-ahead run reads first."""
+        return tuple(
+            (base, runner)
+            for base, runner in (
+                ("3rd", self.runner_on_third),
+                ("2nd", self.runner_on_second),
+                ("1st", self.runner_on_first),
+            )
+            if runner is not None
+        )
+
+    @property
+    def is_empty(self) -> bool:
+        """Whether the linescore carried nothing worth posting."""
+        return self.batter is None and self.on_deck is None and self.in_hole is None
+
+
+@dataclass(frozen=True)
 class ScheduleWindow:
     """An inclusive day range covering the next N days, today included."""
 

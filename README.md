@@ -11,6 +11,7 @@ A Dockerized Python 3.12 Discord bot that posts Baltimore Orioles lineups, roste
   - `/standings [view]` — the AL wild card race and the AL East, each with next opponents.
   - `/schedule [days]` — upcoming Orioles games over the next N days.
   - `/bullpen` — which relievers are available, judged from their recent usage.
+  - `/ondeck` — who is at bat, on deck, and in the hole in the game being played now.
   - `/help` — command help.
 - Discord embeds with game status, venue, score when available, both batting orders, positions, both starting pitchers, transaction details, and hot/cold matchup emojis with the underlying wOBA and plate appearances when enough history exists.
 - Every player name — batters, both starters, and everyone named in a transaction — links to their Baseball Savant player page. Multi-player trades link all sides, not just the headliner, and post as a single entry instead of once per player.
@@ -37,6 +38,11 @@ A Dockerized Python 3.12 Discord bot that posts Baltimore Orioles lineups, roste
 - `/schedule` lists upcoming games with opponent, start time, and both probable starters.
   The window defaults to the next 7 days and accepts 1 through 30. A game that has already
   finished shows its final score instead of probable starters.
+- `/ondeck` reads the live linescore for the game in progress and names the batter, the
+  hitter on deck, and the one in the hole, alongside the half inning, the count, the outs,
+  the runners on base, and the pitcher facing them. Every name links to Baseball Savant.
+  On a doubleheader it follows the game actually underway, and when no game is live it
+  says so and points at `/lineup`.
 - `/bullpen` grades every reliever on the active roster from his game log: pitching
   today or on back-to-back days reads as unavailable, heavy work the day before as a
   caution, and anything else as available, with the days of rest and the innings, pitch
@@ -188,6 +194,7 @@ After inviting the bot, slash commands are synced globally when the bot starts. 
 /transactions
 /transactions date:2026-08-06
 /bullpen
+/ondeck
 /help
 ```
 

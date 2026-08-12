@@ -16,6 +16,7 @@ from .models import (
     ORIOLES_TEAM_ID,
     ORIOLES_TEAM_NAME,
     UNPLAYED_GAME_STATES,
+    AtBatState,
     DivisionStandings,
     GameInfo,
     HittingSplit,
@@ -206,6 +207,15 @@ class MlbClient:
                     boxscore = None
             games.append(parse_game(raw_game, boxscore))
         return games
+
+    async def fetch_linescore(self, game: GameInfo) -> AtBatState:
+        """The live at-bat for a game: who is up, on deck, and in the hole.
+
+        The linescore is a much smaller response than the full live feed and is
+        the only place MLB publishes the on-deck and in-the-hole slots.
+        """
+        data = await self._get_json(f"/game/{game.game_pk}/linescore")
+        return parse_linescore(data, game)
 
     async def fetch_transactions(self, target_date: date) -> list[TransactionInfo]:
         data = await self._get_json(
@@ -774,6 +784,54 @@ def _optional_text(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def parse_linescore(data: dict[str, Any], game: GameInfo) -> AtBatState:
+    """Turn a linescore into the current at-bat.
+
+    The batting team is taken from the half inning rather than from the
+    linescore's own team block, so the reading stays right even when MLB has
+    not filled the offense's team in yet.
+    """
+    offense = data.get("offense")
+    offense = offense if isinstance(offense, dict) else {}
+    defense = data.get("defense")
+    defense = defense if isinstance(defense, dict) else {}
+
+    is_top_inning = bool(data.get("isTopInning", not game.is_home))
+    batting_home = not is_top_inning
+    orioles_batting = batting_home == game.is_home
+    batting_team = ORIOLES_TEAM_NAME if orioles_batting else game.opponent
+    batting_team_id = ORIOLES_TEAM_ID if orioles_batting else game.opponent_team_id
+
+    return AtBatState(
+        game_pk=game.game_pk,
+        batting_team=batting_team,
+        batting_team_id=batting_team_id,
+        is_top_inning=is_top_inning,
+        inning=_safe_int(data.get("currentInning")),
+        inning_state=str(data.get("inningState") or data.get("inningHalf") or "").strip(),
+        outs=_safe_int(data.get("outs")),
+        balls=_safe_int(data.get("balls")),
+        strikes=_safe_int(data.get("strikes")),
+        batter=_linescore_player(offense.get("batter")),
+        on_deck=_linescore_player(offense.get("onDeck")),
+        in_hole=_linescore_player(offense.get("inHole")),
+        pitcher=_linescore_player(defense.get("pitcher")),
+        runner_on_first=_linescore_player(offense.get("first")),
+        runner_on_second=_linescore_player(offense.get("second")),
+        runner_on_third=_linescore_player(offense.get("third")),
+    )
+
+
+def _linescore_player(raw: Any) -> PlayerRef | None:
+    if not isinstance(raw, dict):
+        return None
+    player_id = _safe_int(raw.get("id"))
+    name = str(raw.get("fullName") or "").strip()
+    if player_id is None or not name:
+        return None
+    return PlayerRef(player_id, name)
 
 
 def parse_game(raw_game: dict[str, Any], boxscore: dict[str, Any] | None = None) -> GameInfo:
