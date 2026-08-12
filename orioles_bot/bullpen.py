@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Iterable, Sequence
-from datetime import date
+from datetime import date, timedelta
 
 from .dates import stats_window_ending
 from .formatting import format_innings
@@ -146,7 +146,9 @@ def assess_reliever(
             days_rest=days_rest,
         )
 
-    if days_rest == 1 and len(recent) > 1 and (today - recent[1].game_date).days == 2:
+    if days_rest == 1 and any(
+        outing.game_date == last.game_date - timedelta(days=1) for outing in recent[1:]
+    ):
         return RelieverStatus(
             player=player,
             availability=RELIEVER_UNAVAILABLE,
