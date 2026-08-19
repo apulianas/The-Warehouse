@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Sequence
+from dataclasses import replace
 from datetime import date
 
 import pytest
@@ -12,6 +15,8 @@ from orioles_bot.formatting import (
     format_transaction,
 )
 from orioles_bot.mlb import (
+    MlbApiError,
+    MlbClient,
     build_mlb_url,
     headshot_url,
     parse_game,
@@ -25,6 +30,7 @@ from orioles_bot.models import (
     GameInfo,
     LineupPlayer,
     PitcherInfo,
+    Substitution,
     TransactionInfo,
     TransactionPlayer,
 )
@@ -215,7 +221,22 @@ def test_arrival_moves_are_told_apart_from_departures(
     assert transaction.is_arrival is expected
 
 
-def test_format_pitchers_renders_both_starters() -> None:
+def test_format_pitchers_labels_each_starter_by_throwing_hand() -> None:
+    game = _game_with_pitchers(
+        PitcherInfo(201, "Orioles Starter", status="Starting pitcher", throws="R"),
+        PitcherInfo(401, "Opponent Starter", status="Probable pitcher", throws="L"),
+    )
+
+    assert format_pitchers(game) == (
+        f"Baltimore Orioles starter: [Orioles Starter]({savant_player_url(201)})"
+        " (RHP)\n"
+        f"New York Yankees starter: [Opponent Starter]({savant_player_url(401)})"
+        " (LHP, probable)"
+    )
+
+
+def test_format_pitchers_falls_back_to_status_without_a_known_hand() -> None:
+    """Handedness comes from a separate lookup, which can come back empty."""
     game = _game_with_pitchers(
         PitcherInfo(201, "Orioles Starter", status="Starting pitcher"),
         PitcherInfo(401, "Opponent Starter", status="Probable pitcher"),
@@ -226,6 +247,15 @@ def test_format_pitchers_renders_both_starters() -> None:
         " (Starting pitcher)\n"
         f"New York Yankees starter: [Opponent Starter]({savant_player_url(401)})"
         " (Probable pitcher)"
+    )
+
+
+def test_format_pitchers_keeps_the_probable_caveat_on_a_default_status() -> None:
+    game = _game_with_pitchers(PitcherInfo(201, "Orioles Starter", throws="R"), None)
+
+    assert format_pitchers(game).startswith(
+        f"Baltimore Orioles starter: [Orioles Starter]({savant_player_url(201)})"
+        " (RHP, probable)"
     )
 
 
@@ -256,6 +286,94 @@ def _game_with_pitchers(
         lineup=(),
         opponent_lineup=(),
     )
+
+
+class _HandednessClient(MlbClient):
+    """An MLB client whose only live call is the handedness lookup."""
+
+    def __init__(self, hands: dict[int, tuple[str | None, str | None]]) -> None:
+        super().__init__(session=None)  # type: ignore[arg-type]
+        self._hands = hands
+        self.requested: list[int] = []
+
+    async def fetch_handedness(
+        self, player_ids: Sequence[int]
+    ) -> dict[int, tuple[str | None, str | None]]:
+        self.requested.extend(player_ids)
+        if self._hands is None:
+            raise MlbApiError("handedness lookup failed")
+        return {
+            player_id: self._hands[player_id]
+            for player_id in player_ids
+            if player_id in self._hands
+        }
+
+
+def test_fetching_games_attaches_each_starters_throwing_hand() -> None:
+    client = _HandednessClient({201: ("R", "R"), 401: ("L", "L")})
+    game = _game_with_pitchers(
+        PitcherInfo(201, "Orioles Starter", status="Starting pitcher"),
+        PitcherInfo(401, "Opponent Starter", status="Probable pitcher"),
+    )
+
+    resolved = asyncio.run(client._with_pitcher_handedness([game]))[0]
+
+    assert resolved.pitcher is not None and resolved.pitcher.throws == "R"
+    assert resolved.opponent_pitcher is not None
+    assert resolved.opponent_pitcher.throws == "L"
+    # One batched lookup, so a full slate does not mean a request per starter.
+    assert client.requested == [201, 401]
+
+
+def test_a_failed_handedness_lookup_leaves_the_starters_alone() -> None:
+    """A missing hand costs a label, not the card."""
+    client = _HandednessClient(None)  # type: ignore[arg-type]
+    game = _game_with_pitchers(
+        PitcherInfo(201, "Orioles Starter", status="Starting pitcher"), None
+    )
+
+    resolved = asyncio.run(client._with_pitcher_handedness([game]))[0]
+
+    assert resolved.pitcher is not None and resolved.pitcher.throws is None
+    assert format_pitchers(resolved).startswith(
+        f"Baltimore Orioles starter: [Orioles Starter]({savant_player_url(201)})"
+        " (Starting pitcher)"
+    )
+
+
+def test_handedness_reaches_the_pitcher_a_substitute_will_face() -> None:
+    pitcher = PitcherInfo(401, "Opponent Reliever", status="Pitching")
+    batter = LineupPlayer(
+        player_id=101,
+        name="Pinch Hitter",
+        position="PH",
+        batting_order=3,
+        headshot_url=None,
+        substitution_order=1,
+    )
+    game = replace(
+        _game_with_pitchers(None, pitcher),
+        current_opponent_pitcher=pitcher,
+        substitutions=(
+            Substitution(
+                game_pk=1,
+                slot=3,
+                batter=batter,
+                replaced=None,
+                pitcher=pitcher,
+                is_orioles=True,
+                batting_team="Baltimore Orioles",
+                batting_team_id=110,
+            ),
+        ),
+    )
+
+    resolved = asyncio.run(
+        _HandednessClient({401: ("L", "L")})._with_pitcher_handedness([game])
+    )[0]
+
+    assert resolved.substitutions[0].pitcher is not None
+    assert resolved.substitutions[0].pitcher.throws == "L"
 
 
 def test_savant_preview_url_uses_game_pk() -> None:

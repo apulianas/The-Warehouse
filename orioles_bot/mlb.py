@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Sequence
+import logging
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -37,6 +38,8 @@ from .models import (
     normalize_game_state,
 )
 
+
+LOGGER = logging.getLogger(__name__)
 
 BASE_URL = "https://statsapi.mlb.com/api/v1"
 # d_... is a Cloudinary default: players without a photo (minor leaguers, new
@@ -206,7 +209,7 @@ class MlbClient:
                 except MlbApiError:
                     boxscore = None
             games.append(parse_game(raw_game, boxscore))
-        return games
+        return await self._with_pitcher_handedness(games)
 
     async def fetch_linescore(self, game: GameInfo) -> AtBatState:
         """The live at-bat for a game: who is up, on deck, and in the hole.
@@ -461,7 +464,30 @@ class MlbClient:
                 "hydrate": "probablePitcher,team,linescore,flags",
             },
         )
-        return parse_schedule(schedule)
+        return await self._with_pitcher_handedness(parse_schedule(schedule))
+
+    async def _with_pitcher_handedness(self, games: list[GameInfo]) -> list[GameInfo]:
+        """Fill in each starter's throwing hand so cards can say RHP or LHP.
+
+        Neither the schedule's probable pitcher nor the boxscore carries
+        handedness, so it takes a ``/people`` lookup — one batched request for
+        every starter on the slate. A failure here costs a label, not the card,
+        so the games come back unchanged rather than raising.
+        """
+        player_ids = {
+            pitcher.player_id
+            for game in games
+            for pitcher in _game_pitchers(game)
+            if pitcher is not None and pitcher.player_id is not None
+        }
+        if not player_ids:
+            return games
+        try:
+            hands = await self.fetch_handedness(sorted(player_ids))
+        except MlbApiError as exc:
+            LOGGER.info("Pitcher handedness unavailable: %s", exc)
+            return games
+        return [_with_pitcher_hands(game, hands) for game in games]
 
     async def fetch_next_games(
         self, team_ids: Sequence[int], start: date, days: int = NEXT_GAME_LOOKAHEAD_DAYS
@@ -916,6 +942,44 @@ def parse_game(raw_game: dict[str, Any], boxscore: dict[str, Any] | None = None)
         substitutions=substitutions,
         abstract_status=abstract_status,
         coded_status=coded_status,
+    )
+
+
+def _game_pitchers(game: GameInfo) -> tuple[PitcherInfo | None, ...]:
+    return (
+        game.pitcher,
+        game.opponent_pitcher,
+        game.current_pitcher,
+        game.current_opponent_pitcher,
+        *(substitution.pitcher for substitution in game.substitutions),
+    )
+
+
+def _with_pitcher_hands(
+    game: GameInfo, hands: Mapping[int, tuple[str | None, str | None]]
+) -> GameInfo:
+    """Copy a game with every pitcher on it carrying his throwing hand."""
+
+    def resolve(pitcher: PitcherInfo | None) -> PitcherInfo | None:
+        if pitcher is None or pitcher.player_id is None:
+            return pitcher
+        throws = hands.get(pitcher.player_id, (None, None))[1]
+        if throws is None:
+            return pitcher
+        return replace(pitcher, throws=throws)
+
+    return replace(
+        game,
+        pitcher=resolve(game.pitcher),
+        opponent_pitcher=resolve(game.opponent_pitcher),
+        current_pitcher=resolve(game.current_pitcher),
+        current_opponent_pitcher=resolve(game.current_opponent_pitcher),
+        # A substitution card names the arm the hitter is walking up against,
+        # so it has to see the same hand the rest of the game does.
+        substitutions=tuple(
+            replace(substitution, pitcher=resolve(substitution.pitcher))
+            for substitution in game.substitutions
+        ),
     )
 
 

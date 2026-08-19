@@ -81,7 +81,28 @@ def _format_pitcher_line(team: str, pitcher: PitcherInfo | None) -> str:
         name = f"[{pitcher.name}]({savant_player_url(pitcher.player_id)})"
     else:
         name = pitcher.name
-    return f"{team} starter: {name} ({pitcher.status})"
+    return f"{team} starter: {name} ({_pitcher_qualifier(pitcher)})"
+
+
+def _pitcher_qualifier(pitcher: PitcherInfo) -> str:
+    """What goes in the parentheses after a starter's name.
+
+    "RHP" tells the reader something the rest of the line does not, whereas
+    "Starting pitcher" only repeats the "starter:" label in front of it. The
+    status is the fallback for a pitcher whose hand never came back from the
+    API, and an unconfirmed starter keeps his caveat next to the hand so the
+    line still reads as a projection rather than a posted lineup.
+    """
+    hand = HAND_NAMES.get(pitcher.throws or "")
+    if hand is None:
+        return pitcher.status
+    if _is_probable(pitcher.status):
+        return f"{hand}, probable"
+    return hand
+
+
+def _is_probable(status: str) -> bool:
+    return status.strip().casefold().startswith("probable")
 
 
 def format_lineup_heading(

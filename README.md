@@ -13,7 +13,7 @@ A Dockerized Python 3.12 Discord bot that posts Baltimore Orioles lineups, roste
   - `/bullpen` — which relievers are available, judged from their recent usage.
   - `/ondeck` — who is at bat, on deck, and in the hole in the game being played now.
   - `/help` — command help.
-- Discord embeds with game status, venue, score when available, both batting orders, positions, both starting pitchers, transaction details, and hot/cold matchup emojis with the underlying wOBA and plate appearances when enough history exists.
+- Discord embeds with game status, venue, score when available, both batting orders, positions, both starting pitchers labelled RHP or LHP, transaction details, and hot/cold matchup emojis with the underlying wOBA and plate appearances when enough history exists.
 - Every player name — batters, both starters, and everyone named in a transaction — links to their Baseball Savant player page. Multi-player trades link all sides, not just the headliner, and post as a single entry instead of once per player.
 - Roster moves found in the same check post as a single message, so a matched set — an option out and the recall it pays for — arrives as one announcement rather than one per move. The card is sorted into "Joining the roster", "Leaving the roster", and "Other moves" for trades, since MLB's feed interleaves them.
 - A lone move keeps a thumbnail rather than a full-width headshot, so no roster post fills a phone screen. When several players join at once, each gets his own card with a thumbnail, so no arriving player goes unpictured.
@@ -204,8 +204,8 @@ Representative `/lineup` embed:
 Baltimore Orioles at New York Yankees
 Thu, Aug 6 at 7:05 PM EDT • Yankee Stadium
 Status: Pre-Game
-Baltimore Orioles starter: Zach Eflin (Probable pitcher)
-New York Yankees starter: Max Fried (Probable pitcher)
+Baltimore Orioles starter: Zach Eflin (RHP, probable)
+New York Yankees starter: Max Fried (LHP, probable)
 
 Baltimore Orioles batting order — full matchup vs Max Fried
 1. SS Gunnar Henderson 🔥 (.450 wOBA, 8 PA)
