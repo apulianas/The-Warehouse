@@ -36,6 +36,11 @@ NON_AT_BAT_EVENTS = {
     "sac_fly_double_play",
     "walk",
 }
+# Statcast closes a plate appearance that never finished — the inning ended on a
+# caught stealing or a pickoff — with this event. It is neither an official
+# plate appearance nor an at bat, and the batter leads off the next inning, so
+# counting it would inflate the sample and drag the rates down.
+NON_PLATE_APPEARANCE_EVENTS = {"truncated_pa"}
 
 FetchRecords = Callable[[int, int], Any]
 FetchHandRecords = Callable[[int, str, date, date], Any]
@@ -210,10 +215,14 @@ def calculate_matchup_history(records: Iterable[Mapping[str, Any]]) -> MatchupHi
     """Total a batter's plate appearances against one pitcher.
 
     Statcast reports one row per pitch, so only rows carrying an ``events``
-    value close out a plate appearance and count here.
+    value close out a plate appearance and count here, minus the handful of
+    events that end a row without ending a plate appearance.
     """
     plate_appearances = [
-        record for record in records if _clean_event(record.get("events")) is not None
+        record
+        for record in records
+        if (event := _clean_event(record.get("events"))) is not None
+        and event not in NON_PLATE_APPEARANCE_EVENTS
     ]
 
     woba_numerator = 0.0
@@ -286,16 +295,18 @@ def annotation_from_history(
 ) -> MatchupAnnotation | None:
     """Flag a matchup hot or cold, preferring wOBA and falling back to average.
 
-    A strikeout-heavy sample can leave wOBA thin even when the plate appearance
-    count clears the bar, so average covers that case.
+    Sample size is judged on plate appearances and nothing else. wOBA's own
+    denominator drops intentional walks and sacrifice bunts, so it is used to
+    work out the rate but never to gate it or to describe how big the sample
+    was — doing either understated the count and sent otherwise identical
+    matchups down the looser average thresholds. Average stays as the fallback
+    for when wOBA cannot be computed at all.
     """
     if history.plate_appearances < min_pa:
         return None
 
-    if history.woba is not None and history.woba_denominator >= min_pa:
-        return _classify_metric(
-            "wOBA", history.woba, int(round(history.woba_denominator))
-        )
+    if history.woba is not None:
+        return _classify_metric("wOBA", history.woba, history.plate_appearances)
 
     if history.average is None:
         return None
