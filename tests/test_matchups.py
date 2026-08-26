@@ -10,7 +10,9 @@ from orioles_bot.embeds import lineup_embeds
 from orioles_bot.formatting import format_lineup
 from orioles_bot.matchups import (
     MatchupService,
+    annotation_from_history,
     calculate_matchup_annotation,
+    calculate_matchup_history,
     statcast_matchup_csv_url,
 )
 from orioles_bot.mlb import (
@@ -157,6 +159,84 @@ def test_calculate_matchup_annotation_parses_savant_csv_rows() -> None:
     assert annotation is not None
     assert annotation.emoji == "🔥"
     assert annotation.plate_appearances == 5
+
+
+def test_annotation_reports_plate_appearances_not_woba_denominator() -> None:
+    """An intentional walk is a plate appearance even though wOBA skips it.
+
+    Pete Alonso against Matthew Liberatore: seven plate appearances, one of
+    them an intentional walk that Statcast files with ``woba_denom`` of 0. The
+    card used to report the denominator, so it read six.
+    """
+    records = [
+        {"events": "field_out", "woba_value": 0, "woba_denom": 1},
+        {"events": "double", "woba_value": 1.25, "woba_denom": 1},
+        {"events": "field_out", "woba_value": 0, "woba_denom": 1},
+        {"events": "strikeout", "woba_value": 0, "woba_denom": 1},
+        {"events": "intent_walk", "woba_value": 0.4, "woba_denom": 0},
+        {"events": "field_out", "woba_value": 0, "woba_denom": 1},
+        {"events": "strikeout", "woba_value": 0, "woba_denom": 1},
+    ]
+
+    history = calculate_matchup_history(records)
+    assert history.plate_appearances == 7
+    assert history.woba_denominator == 6
+    # The intentional walk is excluded from the rate itself, as wOBA requires.
+    assert round(history.woba or 0, 3) == 0.208
+
+    annotation = annotation_from_history(history, 5)
+    assert annotation is not None
+    assert annotation.emoji == "🧊"
+    assert annotation.metric_name == "wOBA"
+    assert annotation.plate_appearances == 7
+
+
+def test_annotation_gates_on_plate_appearances_alone() -> None:
+    """A thin wOBA denominator must not divert the sample to average.
+
+    Five plate appearances including an intentional walk leave a denominator of
+    four. That used to fall through to average, whose looser thresholds turned
+    a cold .225 wOBA into no emoji at all.
+    """
+    records = [
+        {"events": "single", "woba_value": 0.9, "woba_denom": 1},
+        {"events": "field_out", "woba_value": 0, "woba_denom": 1},
+        {"events": "strikeout", "woba_value": 0, "woba_denom": 1},
+        {"events": "field_out", "woba_value": 0, "woba_denom": 1},
+        {"events": "intent_walk", "woba_value": 0.4, "woba_denom": 0},
+    ]
+
+    annotation = annotation_from_history(calculate_matchup_history(records), 5)
+
+    assert annotation == MatchupAnnotation("🧊", "wOBA", 0.225, 5)
+
+
+def test_average_still_covers_a_matchup_with_no_woba_at_all() -> None:
+    records = [{"events": "sac_bunt", "woba_value": 0.2, "woba_denom": 0}] * 5
+
+    history = calculate_matchup_history(records)
+    assert history.plate_appearances == 5
+    assert history.woba is None
+    # Every plate appearance was a sacrifice, so there is no average either.
+    assert annotation_from_history(history, 5) is None
+
+
+def test_truncated_plate_appearance_counts_as_neither_pa_nor_at_bat() -> None:
+    """Statcast's ``truncated_pa`` ends a row without ending a plate appearance."""
+    records = [
+        {"events": "single", "woba_value": 0.9, "woba_denom": 1},
+        {"events": "single", "woba_value": 0.9, "woba_denom": 1},
+        {"events": "field_out", "woba_value": 0, "woba_denom": 1},
+        {"events": "field_out", "woba_value": 0, "woba_denom": 1},
+        {"events": "field_out", "woba_value": 0, "woba_denom": 1},
+        {"events": "truncated_pa", "woba_value": 0, "woba_denom": 0},
+    ]
+
+    history = calculate_matchup_history(records)
+
+    assert history.plate_appearances == 5
+    assert history.at_bats == 5
+    assert history.average == 0.4
 
 
 def test_lineup_embeds_link_statcast_game_preview() -> None:
