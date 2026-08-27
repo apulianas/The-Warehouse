@@ -40,7 +40,8 @@ A Dockerized Python 3.12 Discord bot that posts Baltimore Orioles lineups, roste
   finished shows its final score instead of probable starters.
 - `/ondeck` reads the live linescore for the game in progress and names the batter, the
   hitter on deck, and the one in the hole, alongside the half inning, the count, the outs,
-  the runners on base, and the pitcher facing them. Every name links to Baseball Savant.
+  the runners on base, and the pitcher facing them, plus each of the three hitters'
+  career line against that pitcher. Every name links to Baseball Savant.
   On a doubleheader it follows the game actually underway, and when no game is live it
   says so and points at `/lineup`.
 - `/bullpen` grades every reliever on the active roster from his game log: pitching

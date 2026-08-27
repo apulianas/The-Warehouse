@@ -9,6 +9,7 @@ import discord
 from .formatting import (
     WILD_CARD_SPOTS,
     format_at_bat_heading,
+    format_at_bat_matchups,
     format_at_bat_pitcher,
     format_at_bat_slots,
     format_count,
@@ -569,7 +570,11 @@ def schedule_embeds(    games: Sequence[GameInfo], window: ScheduleWindow, time_
     return [embed]
 
 
-def on_deck_embed(state: AtBatState, game: GameInfo) -> discord.Embed:
+def on_deck_embed(
+    state: AtBatState,
+    game: GameInfo,
+    histories: Mapping[tuple[int, int], MatchupHistory] | None = None,
+) -> discord.Embed:
     """Who is at bat, on deck, and in the hole, with the situation around them."""
     if state.is_empty:
         embed = discord.Embed(
@@ -601,6 +606,14 @@ def on_deck_embed(state: AtBatState, game: GameInfo) -> discord.Embed:
         embed.set_thumbnail(url=headshot_url(state.batter.player_id))
     else:
         embed.set_thumbnail(url=team_logo_url(ORIOLES_TEAM_ID))
+    if histories is not None and state.pitcher is not None:
+        matchups = format_at_bat_matchups(state, histories)
+        if matchups:
+            embed.add_field(
+                name=f"Career vs {state.pitcher.name}",
+                value=_limit_field(matchups),
+                inline=False,
+            )
     count = format_count(state)
     embed.set_footer(
         text=f"{count} • Data: public MLB Stats API"
@@ -703,8 +716,8 @@ def help_embed() -> discord.Embed:
         name="/ondeck",
         value=(
             "Show who is at bat, on deck, and in the hole in the Orioles game "
-            "being played right now, with the count, outs, runners, and the "
-            "pitcher facing them."
+            "being played right now, with the count, outs, runners, the "
+            "pitcher facing them, and each hitter's career line against him."
         ),
         inline=False,
     )
