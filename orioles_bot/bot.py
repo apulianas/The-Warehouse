@@ -46,6 +46,7 @@ from .matchups import MatchupService
 from .mlb import MlbApiError, MlbClient
 from .models import (
     AL_EAST_DIVISION_ID,
+    AtBatState,
     BULLPEN_WORKLOAD_DAYS,
     DivisionStandings,
     GameInfo,
@@ -832,9 +833,32 @@ def _on_deck_command(bot: OriolesBot) -> app_commands.Command[Any, ..., None]:
             await interaction.followup.send(embed=error_embed(str(exc)), ephemeral=True)
             return
 
-        await interaction.followup.send(embed=on_deck_embed(state, live))
+        await interaction.followup.send(
+            embed=on_deck_embed(state, live, await _at_bat_histories(bot, state))
+        )
 
     return ondeck
+
+
+async def _at_bat_histories(
+    bot: OriolesBot, state: AtBatState
+) -> dict[tuple[int, int], MatchupHistory] | None:
+    """Career lines for the three upcoming hitters against the current pitcher.
+
+    ``None`` when there is no pitcher to look up, so the card leaves the
+    matchup field off entirely rather than printing three "unavailable" rows.
+    """
+    pitcher = state.pitcher
+    if pitcher is None:
+        return None
+    pairs = [
+        (player.player_id, pitcher.player_id)
+        for player in (state.batter, state.on_deck, state.in_hole)
+        if player is not None
+    ]
+    if not pairs:
+        return None
+    return await bot.matchups.history_many(pairs)
 
 
 def _help_command() -> app_commands.Command[Any, ..., None]:

@@ -225,6 +225,38 @@ def format_at_bat_slots(state: AtBatState) -> str:
     return "\n".join(lines)
 
 
+def format_at_bat_matchups(
+    state: AtBatState,
+    histories: Mapping[tuple[int, int], MatchupHistory] | None = None,
+) -> str:
+    """Each upcoming hitter's career line against the pitcher on the mound.
+
+    Named per slot rather than per player so the order matches the slots
+    above, and silent when there is no pitcher to have a history against.
+    """
+    pitcher = state.pitcher
+    if pitcher is None:
+        return ""
+
+    lines = []
+    for label, player in zip(
+        AT_BAT_SLOT_LABELS, (state.batter, state.on_deck, state.in_hole)
+    ):
+        if player is None:
+            continue
+        history = (histories or {}).get((player.player_id, pitcher.player_id))
+        if history is None:
+            # Distinct from an empty history: the lookup failed, so claiming
+            # there were no plate appearances would overstate what we know.
+            detail = "history unavailable right now"
+        elif not history.has_history:
+            detail = "no prior plate appearances"
+        else:
+            detail = format_history_line(history)
+        lines.append(f"**{label}** {player.name} — {detail}")
+    return "\n".join(lines)
+
+
 def format_at_bat_pitcher(state: AtBatState) -> str:
     if state.pitcher is None:
         return ""

@@ -6,6 +6,7 @@ from typing import Any
 from orioles_bot.embeds import no_live_game_embed, on_deck_embed
 from orioles_bot.formatting import (
     format_at_bat_heading,
+    format_at_bat_matchups,
     format_at_bat_slots,
     format_count,
     format_half_inning,
@@ -13,7 +14,7 @@ from orioles_bot.formatting import (
     format_runners,
 )
 from orioles_bot.mlb import parse_linescore
-from orioles_bot.models import AtBatState, GameInfo, PlayerRef
+from orioles_bot.models import AtBatState, GameInfo, MatchupHistory, PlayerRef
 
 
 def game(is_home: bool = False, opponent_team_id: int | None = 147) -> GameInfo:
@@ -221,3 +222,61 @@ def test_the_no_live_game_embed_points_at_the_lineup_command() -> None:
 
     assert "No Baltimore Orioles game is in progress" in (embed.description or "")
     assert "/lineup" in (embed.description or "")
+
+
+def test_the_matchup_section_lines_up_with_the_slots() -> None:
+    state = parse_linescore(LINESCORE, game())
+    histories = {
+        (683002, 543037): MatchupHistory(
+            plate_appearances=12,
+            at_bats=11,
+            hits=3,
+            home_runs=1,
+            walks=1,
+            strikeouts=4,
+            average=3 / 11,
+            slugging_percentage=6 / 11,
+        ),
+        (668939, 543037): MatchupHistory(),
+    }
+
+    lines = format_at_bat_matchups(state, histories).splitlines()
+
+    assert lines[0] == (
+        "**At bat** Gunnar Henderson — 3-for-11 (1 HR, 1 BB, 4 K) — "
+        ".273 AVG, .545 SLG in 12 PA"
+    )
+    assert lines[1] == "**On deck** Adley Rutschman — no prior plate appearances"
+    # Nothing came back for the hitter in the hole, so the card says as much
+    # rather than claiming he has never faced this pitcher.
+    assert lines[2] == "**In the hole** Colton Cowser — history unavailable right now"
+
+
+def test_no_pitcher_means_no_matchup_section() -> None:
+    state = parse_linescore(dict(LINESCORE, defense={}), game())
+
+    assert format_at_bat_matchups(state, {}) == ""
+
+
+def test_the_on_deck_embed_carries_the_matchup_history() -> None:
+    live = game()
+    histories = {
+        (683002, 543037): MatchupHistory(
+            plate_appearances=4, at_bats=4, hits=2, average=0.5,
+            slugging_percentage=0.5,
+        )
+    }
+
+    embed = on_deck_embed(parse_linescore(LINESCORE, live), live, histories)
+
+    field = embed.fields[0]
+    assert field.name == "Career vs Gerrit Cole"
+    assert "**At bat** Gunnar Henderson — 2-for-4" in (field.value or "")
+
+
+def test_the_on_deck_embed_omits_matchups_when_none_were_fetched() -> None:
+    live = game()
+
+    embed = on_deck_embed(parse_linescore(LINESCORE, live), live)
+
+    assert embed.fields == []
