@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Sequence
 from dataclasses import replace
-from datetime import date
+from datetime import date, datetime, timezone
+from pathlib import Path
 
 import pytest
 
+import orioles_bot
 from orioles_bot.formatting import (
     format_lineup,
     format_lineup_heading,
+    format_moment,
     format_no_transactions,
     format_pitchers,
     format_transaction,
@@ -516,3 +520,61 @@ def test_format_transaction_falls_back_when_description_omits_the_player() -> No
         f"[Hidden Player]({savant_player_url(7)}): "
         "Baltimore Orioles activated a player from the injured list."
     )
+
+
+# `%-d` and `%-I` are a glibc extension. They render "Aug 6" and "7:05 PM"
+# instead of "Aug 06" and "07:05 PM" on Linux and macOS, and raise ValueError
+# on Windows. This bot is written on a Mac, maintained from a PC and deployed
+# in a Linux container, so every date goes through `format_moment`.
+PACKAGE_SOURCES = sorted(Path(orioles_bot.__file__).parent.glob("*.py"))
+INLINE_DATE_FORMAT_SPEC = re.compile(r"\{[^{}]*:%")
+
+
+def test_format_moment_strips_the_leading_zero_from_a_day() -> None:
+    assert format_moment(date(2026, 8, 6), "%b %-d, %Y") == "Aug 6, 2026"
+    assert format_moment(date(2026, 8, 16), "%b %-d, %Y") == "Aug 16, 2026"
+
+
+def test_format_moment_strips_the_leading_zero_from_an_hour() -> None:
+    morning = datetime(2026, 8, 6, 7, 5, tzinfo=timezone.utc)
+    evening = datetime(2026, 8, 6, 19, 5, tzinfo=timezone.utc)
+
+    assert format_moment(morning, "%-I:%M %p") == "7:05 AM"
+    assert format_moment(evening, "%-I:%M %p") == "7:05 PM"
+
+
+def test_format_moment_renders_midnight_as_twelve() -> None:
+    """`hour % 12` is 0 at midnight, which is not an hour anyone writes."""
+    midnight = datetime(2026, 8, 29, 0, 22, tzinfo=timezone.utc)
+
+    assert format_moment(midnight, "%-I:%M %p") == "12:22 AM"
+    assert format_moment(midnight.replace(hour=12), "%-I:%M %p") == "12:22 PM"
+
+
+def test_format_moment_leaves_an_hour_alone_for_a_plain_date() -> None:
+    """A `date` has no hour, so an hour directive must not be substituted."""
+    assert format_moment(date(2026, 8, 6), "%b %-d") == "Aug 6"
+
+
+def test_dates_only_reach_strftime_through_the_portable_helper() -> None:
+    """One `strftime` call in the package, inside `format_moment`."""
+    calls = {
+        path.name: path.read_text(encoding="utf-8").count(".strftime(")
+        for path in PACKAGE_SOURCES
+    }
+
+    assert {name: n for name, n in calls.items() if n} == {"formatting.py": 1}
+
+
+def test_no_date_is_rendered_with_an_inline_format_spec() -> None:
+    """`f"{when:%b %-d}"` goes straight to `strftime` and breaks on Windows."""
+    offenders = [
+        f"{path.name}:{number}: {line.strip()}"
+        for path in PACKAGE_SOURCES
+        for number, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(), start=1
+        )
+        if INLINE_DATE_FORMAT_SPEC.search(line)
+    ]
+
+    assert offenders == []

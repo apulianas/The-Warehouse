@@ -91,6 +91,12 @@ STANDINGS_VIEW_WILD_CARD = "wildcard"
 STANDINGS_VIEW_DIVISION = "division"
 # Which situational split matches the hand the incoming batter will face.
 PLATOON_SPLIT_CODES = {"L": "vl", "R": "vr"}
+# How far into the new local day a game from the previous one is still worth
+# asking about. MLB files a game under the `officialDate` it started on, so a
+# late start still in extra innings is only reachable by yesterday's date. Six
+# hours clears the longest plausible finish for a 10:10 PM first pitch while
+# keeping the extra request off the rest of the day.
+CARRY_OVER_CUTOFF_HOUR = 6
 
 
 def webhook_label(url: str) -> str:
@@ -137,6 +143,7 @@ class OriolesBot(commands.Bot):
             self.announcement_state.adopt_legacy_keys(
                 self.config.discord_channel_ids[0]
             )
+        self.announcement_state.adopt_undated_keys()
         self.tree.add_command(_lineup_command(self))
         self.tree.add_command(_transactions_command(self))
         self.tree.add_command(_player_stats_command(self))
@@ -204,7 +211,11 @@ class OriolesBot(commands.Bot):
         if not targets and not substitution_targets:
             return
 
-        target_date = today_in_zone(self.config.time_zone)
+        # One clock reading for the whole pass, so the date cannot roll over
+        # between deciding what "today" is and deciding whether yesterday still
+        # has a game running.
+        now = datetime.now(timezone.utc)
+        target_date = today_in_zone(self.config.time_zone, now)
         try:
             games = await self.mlb.fetch_games(target_date)
             transactions = await self.mlb.fetch_transactions(target_date)
@@ -212,22 +223,67 @@ class OriolesBot(commands.Bot):
             LOGGER.warning("Polling skipped because MLB data could not be fetched: %s", exc)
             return
 
-        for game in games:
+        # A game still being played from yesterday is older news than anything
+        # today, so it goes first. Each game carries the date it is filed under
+        # rather than the date the poll is working, since the two differ either
+        # side of midnight and the cards read that date back.
+        carried = await self._carried_over_games(target_date, now)
+        dated_games = [(target_date - timedelta(days=1), game) for game in carried]
+        dated_games += [(target_date, game) for game in games]
+
+        for game_date, game in dated_games:
             if not game.lineup or not game.opponent_lineup:
                 continue
-            await self._announce_lineup(game, targets, target_date)
-            await self._announce_substitutions(
-                game, substitution_targets, target_date
-            )
+            await self._announce_lineup(game, targets, game_date)
+            await self._announce_substitutions(game, substitution_targets, game_date)
 
         await self._announce_transactions(transactions, targets, target_date)
 
-        self._apply_poll_interval(games)
+        self._apply_poll_interval([game for _, game in dated_games], now)
 
-    def _apply_poll_interval(self, games: Sequence[GameInfo]) -> None:
+    async def _carried_over_games(
+        self, target_date: date, now: datetime
+    ) -> list[GameInfo]:
+        """Yesterday's games, for as long as one of them is still being played.
+
+        `target_date` flips at local midnight, but MLB keeps a game filed under
+        the `officialDate` it started on for good. A West Coast start still in
+        extra innings therefore vanishes from the poll the moment the clock
+        rolls over, taking every substitution after it with it: the new day's
+        schedule simply does not list that game.
+
+        Only consulted in the small hours, and only carried while something is
+        genuinely live, so an ordinary day never pays for the extra requests. A
+        postponed or suspended game reads as final here, so neither holds the
+        lookback open.
+        """
+        if self.mlb is None:
+            return []
+        if now.astimezone(self.config.time_zone).hour >= CARRY_OVER_CUTOFF_HOUR:
+            return []
+
+        previous = target_date - timedelta(days=1)
+        try:
+            games = await self.mlb.fetch_games(previous)
+        except MlbApiError as exc:
+            LOGGER.info("Could not re-check %s for a game still running: %s", previous, exc)
+            return []
+
+        carried = [game for game in games if game.is_in_progress]
+        if carried:
+            LOGGER.info(
+                "Still following %s game(s) from %s past midnight",
+                len(carried),
+                previous.isoformat(),
+            )
+        return carried
+
+    def _apply_poll_interval(
+        self, games: Sequence[GameInfo], now: datetime | None = None
+    ) -> None:
         """Speed polling up around games and slow it back down afterwards."""
         seconds, reason = poll_interval_for(
-            games, datetime.now(timezone.utc), self.config
+            games, now or datetime.now(timezone.utc), self.config
         )
         if seconds == self._poll_interval:
             return
@@ -243,7 +299,7 @@ class OriolesBot(commands.Bot):
         targets: list[_AnnouncementTarget],
         target_date: date,
     ) -> None:
-        key = lineup_announcement_key(target_date, game)
+        key = lineup_announcement_key(game)
         if not key:
             return
         pending = [
@@ -358,13 +414,18 @@ class OriolesBot(commands.Bot):
 
         Before first pitch a changed batting order is a corrected lineup card,
         which the full lineup post already covers.
+
+        ``target_date`` is the date the game is filed under, not the date the
+        poll is working: it only feeds the stat lookups, since a game that ran
+        past midnight still wants the season and recent form of the day it was
+        played.
         """
         if not game.has_started or not game.substitutions:
             return
 
         pending: list[tuple[Substitution, str, list[_AnnouncementTarget]]] = []
         for substitution in game.substitutions:
-            key = substitution_announcement_key(target_date, substitution)
+            key = substitution_announcement_key(substitution)
             waiting = [
                 target
                 for target in targets
@@ -919,26 +980,36 @@ def poll_interval_for(
     return config.poll_interval_seconds, "no game is near"
 
 
-def lineup_announcement_key(target_date: date, game: GameInfo) -> str | None:
+def lineup_announcement_key(game: GameInfo) -> str | None:
     """Identify a posted lineup card.
 
     Keyed on the announced starters rather than the batting order as it stands,
     so a pinch hitter does not look like a brand new lineup and trigger a
     second full post. Pre-game changes still move the key, because those are
     genuine lineup corrections worth reposting.
+
+    Deliberately carries no date. ``game_pk`` already identifies one game on
+    one day, and a game running past local midnight is polled under both dates
+    either side of it — a date here would make the second pass look
+    unannounced and repost the whole card.
     """
     starters = game.starting_lineup or game.lineup
     if not starters:
         return None
     batting_order = ",".join(str(player.player_id) for player in starters)
     pitcher = game.pitcher.player_id if game.pitcher else "none"
-    return f"lineup:{target_date.isoformat()}:{game.game_pk}:{pitcher}:{batting_order}"
+    return f"lineup:{game.game_pk}:{pitcher}:{batting_order}"
 
 
-def substitution_announcement_key(
-    target_date: date, substitution: Substitution
-) -> str:
-    return f"substitution:{target_date.isoformat()}:{substitution.key}"
+def substitution_announcement_key(substitution: Substitution) -> str:
+    """Identify a posted substitution card.
+
+    Undated for the same reason as the lineup key: ``Substitution.key`` opens
+    with the game id, so a game polled either side of midnight would otherwise
+    repost every substitution it had already announced. On a doubleheader that
+    is both games' worth of cards at once.
+    """
+    return f"substitution:{substitution.key}"
 
 
 def transaction_announcement_key(transaction: TransactionInfo) -> str:

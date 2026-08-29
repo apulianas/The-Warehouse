@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import date
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from .mlb import savant_player_url, savant_team_matchup_url
@@ -45,6 +45,28 @@ PAIRING_MARKERS = (
 )
 
 
+def format_moment(moment: date | datetime, layout: str) -> str:
+    """``strftime`` with the leading-zero-stripping directives made portable.
+
+    ``%-d`` and ``%-I`` render a day or hour without its leading zero, which is
+    what every date in this bot wants: "Aug 6", not "Aug 06". They are a glibc
+    extension though, so they work on Linux and macOS and raise ``ValueError``
+    on Windows. This bot is written on a Mac, maintained from a PC and deployed
+    in a Linux container, so the numbers are substituted in before ``strftime``
+    ever sees the layout.
+
+    ``%-I`` and ``%-H`` are only substituted for a ``datetime``, since a plain
+    ``date`` has no hour to render.
+    """
+    layout = layout.replace("%-d", str(moment.day))
+    layout = layout.replace("%-m", str(moment.month))
+    hour = getattr(moment, "hour", None)
+    if hour is not None:
+        layout = layout.replace("%-I", str(hour % 12 or 12))
+        layout = layout.replace("%-H", str(hour))
+    return moment.strftime(layout)
+
+
 def format_game_title(game: GameInfo) -> str:
     matchup = f"{game.away_team} at {game.home_team}"
     if game.orioles_score is not None and game.opponent_score is not None:
@@ -59,7 +81,9 @@ def format_game_title(game: GameInfo) -> str:
 def format_game_time(game: GameInfo, time_zone: ZoneInfo) -> str:
     if game.game_date is None:
         return "Time TBD"
-    return game.game_date.astimezone(time_zone).strftime("%a, %b %-d at %-I:%M %p %Z")
+    return format_moment(
+        game.game_date.astimezone(time_zone), "%a, %b %-d at %-I:%M %p %Z"
+    )
 
 
 def format_pitcher(game: GameInfo) -> str:
@@ -266,7 +290,7 @@ def format_at_bat_pitcher(state: AtBatState) -> str:
 def format_no_live_game(target_date: date) -> str:
     return (
         f"No {ORIOLES_TEAM_NAME} game is in progress. "
-        f"Try /lineup for {target_date:%B %-d, %Y}."
+        f"Try /lineup for {format_moment(target_date, '%B %-d, %Y')}."
     )
 
 
@@ -278,7 +302,10 @@ def format_no_at_bat(game: GameInfo) -> str:
 
 
 def format_no_games(target_date: date) -> str:
-    return f"No {ORIOLES_TEAM_NAME} game is scheduled for {target_date:%A, %B %-d, %Y}."
+    return (
+        f"No {ORIOLES_TEAM_NAME} game is scheduled for "
+        f"{format_moment(target_date, '%A, %B %-d, %Y')}."
+    )
 
 
 HAND_NAMES = {"L": "LHP", "R": "RHP", "S": "SHP"}
@@ -486,7 +513,10 @@ def _linkify_players(
 
 
 def format_no_transactions(target_date: date) -> str:
-    return f"No Orioles roster transactions found for {target_date:%A, %B %-d, %Y}."
+    return (
+        "No Orioles roster transactions found for "
+        f"{format_moment(target_date, '%A, %B %-d, %Y')}."
+    )
 
 
 NO_STAT = "—"
@@ -526,7 +556,8 @@ def format_stats_window(window: StatsWindow) -> str:
     day_label = "day" if window.days == 1 else "days"
     return (
         f"Last {window.days} {day_label} "
-        f"({window.start:%b %-d} – {window.end:%b %-d, %Y})"
+        f"({format_moment(window.start, '%b %-d')} – "
+        f"{format_moment(window.end, '%b %-d, %Y')})"
     )
 
 
@@ -574,7 +605,7 @@ def format_reliever_outing(outing: PitchingGame) -> str:
     if stat.batters_faced:
         details.append(f"{stat.batters_faced} BF")
     return (
-        f"{outing.game_date:%b %-d} {location} {outing.opponent} "
+        f"{format_moment(outing.game_date, '%b %-d')} {location} {outing.opponent} "
         f"({', '.join(details)})"
     )
 
@@ -720,7 +751,7 @@ def format_next_game_time(
     moment = next_game.game_date
     if time_zone is not None:
         moment = moment.astimezone(time_zone)
-    return moment.strftime("%a %b %-d, %-I:%M %p %Z").strip()
+    return format_moment(moment, "%a %b %-d, %-I:%M %p %Z").strip()
 
 
 def format_rate_text(value: str | None) -> str:
@@ -934,14 +965,16 @@ def format_schedule_window(window: ScheduleWindow) -> str:
     day_label = "day" if window.days == 1 else "days"
     return (
         f"Next {window.days} {day_label} "
-        f"({window.start:%b %-d} – {window.end:%b %-d, %Y})"
+        f"({format_moment(window.start, '%b %-d')} – "
+        f"{format_moment(window.end, '%b %-d, %Y')})"
     )
 
 
 def format_no_scheduled_games(window: ScheduleWindow) -> str:
     return (
         f"No {ORIOLES_TEAM_NAME} games are scheduled between "
-        f"{window.start:%B %-d} and {window.end:%B %-d, %Y}."
+        f"{format_moment(window.start, '%B %-d')} and "
+        f"{format_moment(window.end, '%B %-d, %Y')}."
     )
 
 
@@ -971,4 +1004,4 @@ def format_schedule_entry(game: GameInfo, time_zone: ZoneInfo) -> str:
 def format_schedule_day(game: GameInfo, time_zone: ZoneInfo) -> str:
     if game.game_date is None:
         return "Date TBD"
-    return game.game_date.astimezone(time_zone).strftime("%a, %b %-d")
+    return format_moment(game.game_date.astimezone(time_zone), "%a, %b %-d")

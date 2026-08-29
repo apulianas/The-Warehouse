@@ -23,6 +23,7 @@ from .formatting import (
     format_lineup_heading,
     format_hitting_split,
     format_matchup_history,
+    format_moment,
     format_no_games,
     format_no_player_stats,
     format_no_relievers,
@@ -260,7 +261,7 @@ def transaction_embeds(
         ]
 
     shown = list(transactions[:MAX_EMBED_FIELDS])
-    title = f"Orioles transactions — {target_date:%B %-d, %Y}"
+    title = f"Orioles transactions — {format_moment(target_date, '%B %-d, %Y')}"
     footer = (
         f"Showing {MAX_EMBED_FIELDS} of {len(transactions)} transactions."
         if len(transactions) > MAX_EMBED_FIELDS
@@ -458,7 +459,8 @@ def player_stats_embeds(
             )
             embed.add_field(
                 name=(
-                    f"**{game.game_date:%b %-d} {location} {game.opponent} — "
+                    f"**{format_moment(game.game_date, '%b %-d')} {location} "
+                    f"{game.opponent} — "
                     f"{result}{score}, Pitcher {game.decision}**"
                 ),
                 value=_limit_field(format_pitching_game(game)),

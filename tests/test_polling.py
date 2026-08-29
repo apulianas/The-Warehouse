@@ -12,9 +12,10 @@ from dataclasses import replace
 
 from orioles_bot.bot import OriolesBot, poll_interval_for
 from orioles_bot.config import BotConfig
+from orioles_bot.dates import today_in_zone
 from orioles_bot.formatting import format_matchup_history, format_platoon_split
 from orioles_bot.matchups import MatchupService, calculate_matchup_history
-from orioles_bot.mlb import headshot_url
+from orioles_bot.mlb import MlbApiError, headshot_url
 from orioles_bot.models import (
     GameInfo,
     HittingSplit,
@@ -398,6 +399,140 @@ def test_substitutions_go_to_their_own_channel_when_set() -> None:
 
     assert lineup == ["123"]
     assert substitutions == ["456"]
+
+
+# Midnight in the configured zone splits a late West Coast start in two: MLB
+# keeps the game filed under the date it began, so the new day's schedule does
+# not list it at all.
+EASTERN = ZoneInfo("America/New_York")
+CARRY_CONFIG = replace(CONFIG, time_zone=EASTERN)
+YESTERDAY = date(2026, 8, 28)
+TODAY = date(2026, 8, 29)
+# 12:22 AM Eastern, the minute Gunnar Henderson pinch ran for Pete Alonso in
+# the tenth inning of a game that started at 9:41 PM the previous evening.
+PAST_MIDNIGHT = datetime(2026, 8, 29, 4, 22, tzinfo=timezone.utc)
+MORNING = datetime(2026, 8, 29, 12, 0, tzinfo=timezone.utc)
+
+
+class _DatedStubMlb:
+    """Games indexed by the `officialDate` MLB files them under."""
+
+    def __init__(self, by_date: dict[date, list[GameInfo]]) -> None:
+        self._by_date = by_date
+        self.requested: list[date] = []
+
+    async def fetch_games(self, target_date: date) -> list[GameInfo]:
+        self.requested.append(target_date)
+        return list(self._by_date.get(target_date, []))
+
+    async def fetch_transactions(self, target_date: date) -> list[object]:
+        return []
+
+
+def _carry_bot(by_date: dict[date, list[GameInfo]]) -> OriolesBot:
+    bot = OriolesBot(CARRY_CONFIG)
+    bot.mlb = _DatedStubMlb(by_date)  # type: ignore[assignment]
+    return bot
+
+
+LIVE_YESTERDAY = _game(
+    "In Progress", abstract="Live", coded="I", game_pk=824960
+)
+FINAL_YESTERDAY = _game("Final", abstract="Final", coded="F", game_pk=824960)
+
+
+def test_a_game_running_past_midnight_is_still_polled() -> None:
+    """The bug: the date rolled over and the live game vanished from the poll."""
+    bot = _carry_bot({YESTERDAY: [LIVE_YESTERDAY]})
+
+    carried = asyncio.run(bot._carried_over_games(TODAY, PAST_MIDNIGHT))
+
+    assert [game.game_pk for game in carried] == [824960]
+    assert bot.mlb.requested == [YESTERDAY]  # type: ignore[union-attr]
+
+
+def test_yesterday_is_dropped_once_its_game_is_final() -> None:
+    bot = _carry_bot({YESTERDAY: [FINAL_YESTERDAY]})
+
+    assert asyncio.run(bot._carried_over_games(TODAY, PAST_MIDNIGHT)) == []
+
+
+def test_yesterday_is_not_polled_after_the_small_hours() -> None:
+    """A normal day must not pay for a second schedule request every poll."""
+    bot = _carry_bot({YESTERDAY: [LIVE_YESTERDAY]})
+
+    assert asyncio.run(bot._carried_over_games(TODAY, MORNING)) == []
+    assert bot.mlb.requested == []  # type: ignore[union-attr]
+
+
+@pytest.mark.parametrize("status", ["Postponed", "Suspended", "Cancelled"])
+def test_a_called_off_game_does_not_hold_the_lookback_open(status: str) -> None:
+    """These keep their start time all day, so they must read as done."""
+    bot = _carry_bot({YESTERDAY: [_game(status, abstract="Live", game_pk=824960)]})
+
+    assert asyncio.run(bot._carried_over_games(TODAY, PAST_MIDNIGHT)) == []
+
+
+def test_only_the_unfinished_half_of_a_doubleheader_is_carried() -> None:
+    """A split doubleheader's opener has been over for hours by midnight."""
+    opener = _game("Final", abstract="Final", coded="F", game_pk=824735)
+    nightcap = _game("In Progress", abstract="Live", coded="I", game_pk=824732)
+    bot = _carry_bot({YESTERDAY: [opener, nightcap]})
+
+    carried = asyncio.run(bot._carried_over_games(TODAY, PAST_MIDNIGHT))
+
+    assert [game.game_pk for game in carried] == [824732]
+
+
+def test_a_failed_lookback_does_not_stop_todays_poll() -> None:
+    class _Failing:
+        async def fetch_games(self, target_date: date) -> list[GameInfo]:
+            raise MlbApiError("boom")
+
+    bot = OriolesBot(CARRY_CONFIG)
+    bot.mlb = _Failing()  # type: ignore[assignment]
+
+    assert asyncio.run(bot._carried_over_games(TODAY, PAST_MIDNIGHT)) == []
+
+
+def test_a_carried_game_is_announced_under_the_date_it_was_played() -> None:
+    """Its stats and its card belong to yesterday, not to the new date."""
+    player = LineupPlayer(
+        player_id=1, name="Player", position="CF", batting_order=1, headshot_url=None
+    )
+    carried = replace(LIVE_YESTERDAY, lineup=(player,), opponent_lineup=(player,))
+    bot = _carry_bot({})
+    seen: list[tuple[int, date]] = []
+
+    async def fake_targets(channel_ids, webhook_urls):  # type: ignore[no-untyped-def]
+        return [str(channel_id) for channel_id in channel_ids]
+
+    async def fake_carried(target_date, now):  # type: ignore[no-untyped-def]
+        return [carried]
+
+    async def fake_lineup(game, targets, target_date):  # type: ignore[no-untyped-def]
+        return None
+
+    async def fake_substitutions(game, targets, target_date):  # type: ignore[no-untyped-def]
+        seen.append((game.game_pk, target_date))
+
+    bot._announcement_targets = fake_targets  # type: ignore[method-assign]
+    bot._carried_over_games = fake_carried  # type: ignore[method-assign]
+    bot._announce_lineup = fake_lineup  # type: ignore[method-assign]
+    bot._announce_substitutions = fake_substitutions  # type: ignore[method-assign]
+
+    asyncio.run(OriolesBot.poll_updates.coro(bot))
+
+    today = today_in_zone(EASTERN)
+    assert seen == [(824960, today - timedelta(days=1))]
+
+
+def test_a_carried_game_keeps_the_live_cadence() -> None:
+    """Otherwise the poll idles at five minutes through the tenth inning."""
+    assert poll_interval_for([LIVE_YESTERDAY], PAST_MIDNIGHT, CARRY_CONFIG) == (
+        60,
+        "a game is in progress",
+    )
 
 
 POVICH_ID = 683551

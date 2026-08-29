@@ -124,20 +124,16 @@ def _raw_game(status: str = "In Progress") -> dict[str, object]:
 
 def test_lineup_key_is_unchanged_by_a_substitution() -> None:
     """The bug: a pinch hitter used to mint a new key and repost the lineup."""
-    target_date = date(2026, 8, 7)
     before = parse_game(_raw_game(), _boxscore())
     after = parse_game(_raw_game(), _boxscore(orioles_subs=True))
 
     assert after.lineup[8].player_id == 1900
     assert after.lineup[8].is_substitute
-    assert lineup_announcement_key(target_date, before) == lineup_announcement_key(
-        target_date, after
-    )
+    assert lineup_announcement_key(before) == lineup_announcement_key(after)
 
 
 def test_lineup_key_still_changes_when_the_starters_change() -> None:
     """A pre-game scratch is a real lineup correction and should repost."""
-    target_date = date(2026, 8, 7)
     original = parse_game(_raw_game("Scheduled"), _boxscore())
 
     scratched = _boxscore()
@@ -147,9 +143,7 @@ def test_lineup_key_still_changes_when_the_starters_change() -> None:
     teams["battingOrder"][8] = 1010
     replaced = parse_game(_raw_game("Scheduled"), scratched)
 
-    assert lineup_announcement_key(target_date, original) != lineup_announcement_key(
-        target_date, replaced
-    )
+    assert lineup_announcement_key(original) != lineup_announcement_key(replaced)
 
 
 def test_substitution_is_paired_with_the_player_replaced() -> None:
@@ -202,13 +196,46 @@ def test_substitutions_are_ignored_before_first_pitch() -> None:
 
 
 def test_substitution_key_is_stable_across_polls() -> None:
-    target_date = date(2026, 8, 7)
     first = parse_game(_raw_game(), _boxscore(orioles_subs=True))
     second = parse_game(_raw_game(), _boxscore(orioles_subs=True))
 
     assert substitution_announcement_key(
-        target_date, first.substitutions[0]
-    ) == substitution_announcement_key(target_date, second.substitutions[0])
+        first.substitutions[0]
+    ) == substitution_announcement_key(second.substitutions[0])
+
+
+def test_announcement_keys_carry_no_date() -> None:
+    """A game polled either side of midnight must not repost its cards.
+
+    `target_date` flips at local midnight while the game keeps the
+    `officialDate` it started on, so a dated key made the second pass look
+    unannounced.
+    """
+    game = parse_game(_raw_game(), _boxscore(orioles_subs=True))
+
+    lineup_key = lineup_announcement_key(game)
+    assert lineup_key is not None
+    assert "2026-08-07" not in lineup_key
+    assert "2026-08-07" not in substitution_announcement_key(game.substitutions[0])
+
+
+def test_a_doubleheader_keys_each_game_separately() -> None:
+    """Both games share a date, so only `game_pk` tells the cards apart.
+
+    Identical lineups and an identical substitution in the same slot is the
+    worst case, and the one a split doubleheader actually produces.
+    """
+    opener_raw = _raw_game()
+    nightcap_raw = _raw_game()
+    nightcap_raw["gamePk"] = 778
+
+    opener = parse_game(opener_raw, _boxscore(orioles_subs=True))
+    nightcap = parse_game(nightcap_raw, _boxscore(orioles_subs=True))
+
+    assert lineup_announcement_key(opener) != lineup_announcement_key(nightcap)
+    assert substitution_announcement_key(
+        opener.substitutions[0]
+    ) != substitution_announcement_key(nightcap.substitutions[0])
 
 
 def test_a_second_substitution_in_one_slot_replaces_the_first_sub() -> None:
