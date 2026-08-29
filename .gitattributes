@@ -1,0 +1,11 @@
+# This project is written on a Mac, maintained from a PC and deployed in a
+# Linux container. Normalising every text file to LF in the repository keeps a
+# checkout on either machine from rewriting whole files, and keeps CRLF out of
+# the image. Working copies still get their native endings, so nothing changes
+# in an editor on Windows.
+* text=auto
+
+# Line endings are the point of these two, so they are pinned rather than
+# guessed: a shell script or a Dockerfile with CRLF fails inside the container.
+*.sh text eol=lf
+Dockerfile text eol=lf
