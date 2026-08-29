@@ -326,6 +326,60 @@ def test_announcement_state_adopts_legacy_keys(tmp_path) -> None:
     assert not reloaded.unseen(channel_key("lineup:1", 111))
 
 
+def test_announcement_state_adopts_undated_keys(tmp_path) -> None:
+    """Upgrading mid-game must not repost the cards already sent today."""
+    from orioles_bot.state import AnnouncementState, channel_key
+
+    path = tmp_path / "state.json"
+    path.write_text(
+        '{"announced": ['
+        '"lineup:2026-08-28:824960:1:2,3@111",'
+        '"substitution:2026-08-28:824960:7:1:681297@111",'
+        '"transaction:2026-08-28:99@111"'
+        "]}",
+        encoding="utf-8",
+    )
+
+    state = AnnouncementState(str(path))
+    state.load()
+    state.adopt_undated_keys()
+
+    assert not state.unseen(channel_key("lineup:824960:1:2,3", 111))
+    assert not state.unseen(channel_key("substitution:824960:7:1:681297", 111))
+    # A transaction really is date-scoped, so its key keeps the date.
+    assert state.unseen(channel_key("transaction:99", 111))
+
+    reloaded = AnnouncementState(str(path))
+    reloaded.load()
+    assert not reloaded.unseen(channel_key("substitution:824960:7:1:681297", 111))
+
+
+def test_adopting_undated_keys_leaves_current_keys_alone(tmp_path) -> None:
+    from orioles_bot.state import AnnouncementState, channel_key
+
+    path = tmp_path / "state.json"
+    path.write_text(
+        '{"announced": ["substitution:824960:2:1:683002@111"]}', encoding="utf-8"
+    )
+
+    state = AnnouncementState(str(path))
+    state.load()
+    state.adopt_undated_keys()
+
+    assert not state.unseen(channel_key("substitution:824960:2:1:683002", 111))
+
+
+def test_an_eight_digit_game_id_is_not_mistaken_for_a_date() -> None:
+    """`fromisoformat` also accepts YYYYMMDD, which a game id could look like."""
+    from orioles_bot.state import undated_key
+
+    assert undated_key("substitution:20260828:2:1:683002") is None
+    assert undated_key("lineup:824960:1:2,3") is None
+    assert undated_key("substitution:2026-08-28:824960:2:1:683002") == (
+        "substitution:824960:2:1:683002"
+    )
+
+
 def test_webhook_id_never_exposes_the_token() -> None:
     from orioles_bot.bot import webhook_id, webhook_label
 

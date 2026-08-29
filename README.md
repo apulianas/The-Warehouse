@@ -58,6 +58,16 @@ A Dockerized Python 3.12 Discord bot that posts Baltimore Orioles lineups, roste
 - Polling adapts to the schedule: faster in the hours before first pitch, faster
   again once the game starts, and back to the idle baseline in between.
   Postponed and cancelled games are treated as idle.
+- A game still being played after local midnight is followed to the last out.
+  MLB files a game under the date it started on, so a late West Coast start
+  that runs into extra innings would otherwise drop out of the poll the moment
+  the date rolled over, silently taking every substitution after midnight with
+  it. The previous day is only re-checked in the small hours, and only while
+  something from it is genuinely live.
+- Each game of a doubleheader is tracked on its own. Both games share a date,
+  so cards are identified by game instead — the two never share a lineup post
+  or swallow each other's substitutions, even when the same player pinch hits
+  in the same lineup slot twice.
 - Automatic lineup posts wait until both teams' batting orders are available.
 - The full lineup is posted once. Later changes arrive as a compact substitution
   card instead of reposting the whole batting order.
