@@ -276,7 +276,11 @@ python -m pytest
 python -m compileall orioles_bot tests
 ```
 
-Tests do not call the network.
+Tests do not call the network, and run on Windows, macOS and Linux alike. Dates
+are rendered through `format_moment` rather than `strftime`'s `%-d` and `%-I`,
+which are a glibc extension that raises `ValueError` on Windows — a test guards
+against either creeping back in, so the suite stays runnable wherever the bot
+is being maintained rather than only where it is deployed.
 
 ## Data source
 
