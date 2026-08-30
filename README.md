@@ -12,6 +12,7 @@ A Dockerized Python 3.12 Discord bot that posts Baltimore Orioles lineups, roste
   - `/schedule [days]` — upcoming Orioles games over the next N days.
   - `/bullpen` — which relievers are available, judged from their recent usage.
   - `/ondeck` — who is at bat, on deck, and in the hole in the game being played now.
+  - `/injuries` — the current injured list, with dates, injuries, and rehab assignments.
   - `/help` — command help.
 - Discord embeds with game status, venue, score when available, both batting orders, positions, both starting pitchers labelled RHP or LHP, transaction details, and hot/cold matchup emojis with the underlying wOBA and plate appearances when enough history exists.
 - Every player name — batters, both starters, and everyone named in a transaction — links to their Baseball Savant player page. Multi-player trades link all sides, not just the headliner, and post as a single entry instead of once per player.
@@ -52,6 +53,14 @@ A Dockerized Python 3.12 Discord bot that posts Baltimore Orioles lineups, roste
   appearance. MLB publishes no availability list, so this is an inference from usage, not
   an official status. The card is cached for a few minutes, since it costs one request per
   pitcher.
+- `/injuries` lists everyone on the injured list, grouped by which list they are on:
+  the day the stint started, the announcement date when the placement was backdated, how
+  many days he has been out, the injury when MLB names it in the transaction wording, the
+  most recent roster move naming him, and any rehab assignment with the affiliate, the day
+  it began, how many rehab games he has played, and the date of the last one. The Stats
+  API publishes no injury report, so everything past the roster status is read back out of
+  the team's transaction feed and the rehabbing player's minor league game log. The card is
+  cached for fifteen minutes.
 - Standings and schedules are served from a short-lived TTL cache that collapses
   concurrent lookups into one request, so a burst of commands does not multiply API calls.
 - Background polling for today's lineup and transaction updates.
@@ -206,6 +215,7 @@ After inviting the bot, slash commands are synced globally when the bot starts. 
 /transactions date:2026-08-06
 /bullpen
 /ondeck
+/injuries
 /help
 ```
 
@@ -259,6 +269,27 @@ If no transactions are returned:
 
 ```text
 No Orioles roster transactions found for Thursday, August 6, 2026.
+```
+
+Representative `/injuries` embed:
+
+```text
+Orioles injured list
+
+2 players on the injured list.
+
+15-Day Injured List (1)
+🏥 Grayson Rodriguez (P) — 15-Day Injured List
+On the IL since Jun 18, 2026 (retroactive; announced Jun 20) — 55 days
+Injury: Right elbow inflammation
+Rehab assignment with Norfolk Tides since Aug 5 — 3 rehab games, last Aug 11
+Latest: Aug 5: Baltimore Orioles sent RHP Grayson Rodriguez on a rehab
+assignment to Norfolk Tides.
+
+60-Day Injured List (1)
+🏥 Kyle Bradish (P) — 60-Day Injured List
+On the IL since Apr 1, 2026 — 133 days
+Injury: Right elbow surgery
 ```
 
 ## Development

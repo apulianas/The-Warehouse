@@ -30,6 +30,7 @@ from .dates import (
 from .embeds import (
     bullpen_embed,
     error_embed,
+    injuries_embed,
     no_live_game_embed,
     on_deck_embed,
     help_embed,
@@ -42,6 +43,7 @@ from .embeds import (
     wild_card_embed,
 )
 from .formatting import format_player_not_found
+from .injuries import InjuryService
 from .matchups import MatchupService
 from .mlb import MlbApiError, MlbClient
 from .models import (
@@ -51,6 +53,7 @@ from .models import (
     DivisionStandings,
     GameInfo,
     HittingSplit,
+    InjuredPlayer,
     MatchupHistory,
     NextGame,
     RECENT_SPLIT_DAYS,
@@ -77,6 +80,10 @@ SCHEDULE_TTL_SECONDS = 300
 # A bullpen card costs one request per pitcher, and usage only moves when
 # someone warms up, so a few minutes of staleness is a cheap trade.
 BULLPEN_TTL_SECONDS = 300
+# An injury list costs a roster read, a season of transactions, and a game log
+# per rehabbing player, and the injured list changes a couple of times a week
+# at most, so it is cached for longer than anything else here.
+INJURIES_TTL_SECONDS = 900
 StatsDays = app_commands.Range[
     int, MIN_STATS_WINDOW_DAYS, MAX_STATS_WINDOW_DAYS
 ]
@@ -121,8 +128,12 @@ class OriolesBot(commands.Bot):
         self.sprint_speed = SprintSpeedService()
         self.player_stats = PlayerStatsService()
         self.bullpen = BullpenService()
+        self.injuries = InjuryService()
         self.bullpen_cache: AsyncTtlCache[str, tuple[RelieverStatus, ...]] = (
             AsyncTtlCache(BULLPEN_TTL_SECONDS)
+        )
+        self.injuries_cache: AsyncTtlCache[str, tuple[InjuredPlayer, ...]] = (
+            AsyncTtlCache(INJURIES_TTL_SECONDS)
         )
         self.standings_cache: AsyncTtlCache[int, StandingsPayload] = AsyncTtlCache(
             STANDINGS_TTL_SECONDS
@@ -151,6 +162,7 @@ class OriolesBot(commands.Bot):
         self.tree.add_command(_schedule_command(self))
         self.tree.add_command(_bullpen_command(self))
         self.tree.add_command(_on_deck_command(self))
+        self.tree.add_command(_injuries_command(self))
         self.tree.add_command(_help_command())
         await self.tree.sync()
         if self.config.has_announcement_targets:
@@ -864,6 +876,29 @@ def _bullpen_command(bot: OriolesBot) -> app_commands.Command[Any, ..., None]:
         )
 
     return bullpen
+
+
+def _injuries_command(bot: OriolesBot) -> app_commands.Command[Any, ..., None]:
+    @app_commands.command(
+        name="injuries",
+        description="Show the Orioles injured list, with dates and rehab assignments.",
+    )
+    async def injuries(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+        client = _require_mlb(bot)
+        today = today_in_zone(bot.config.time_zone)
+        try:
+            injured = await bot.injuries_cache.get_or_fetch(
+                today.isoformat(),
+                lambda: bot.injuries.injured_list(client, today),
+            )
+        except MlbApiError as exc:
+            await interaction.followup.send(embed=error_embed(str(exc)), ephemeral=True)
+            return
+
+        await interaction.followup.send(embed=injuries_embed(injured, today))
+
+    return injuries
 
 
 def _on_deck_command(bot: OriolesBot) -> app_commands.Command[Any, ..., None]:

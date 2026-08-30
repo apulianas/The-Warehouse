@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from datetime import date
 from zoneinfo import ZoneInfo
@@ -24,7 +25,10 @@ from .formatting import (
     format_hitting_split,
     format_matchup_history,
     format_moment,
+    format_injured_player,
+    format_injury_summary,
     format_no_games,
+    format_no_injuries,
     format_no_player_stats,
     format_no_relievers,
     format_no_scheduled_games,
@@ -62,6 +66,7 @@ from .models import (
     DivisionStandings,
     GameInfo,
     HittingSplit,
+    InjuredPlayer,
     MatchupAnnotation,
     MatchupHistory,
     NextGame,
@@ -669,6 +674,53 @@ def bullpen_embed(
     return embed
 
 
+def injuries_embed(
+    players: Sequence[InjuredPlayer], today: date
+) -> discord.Embed:
+    """The current injured list, grouped by which list each player is on."""
+    embed = discord.Embed(
+        title="Orioles injured list",
+        color=ORIOLES_ORANGE,
+    )
+    embed.set_thumbnail(url=team_logo_url(ORIOLES_TEAM_ID))
+    if not players:
+        embed.description = format_no_injuries()
+        embed.set_footer(text="Data: public MLB Stats API")
+        return embed
+
+    embed.description = _limit_description(format_injury_summary(len(players)))
+    for label, group in _injury_groups(players):
+        lines = [format_injured_player(player, today) for player in group]
+        for index, chunk in enumerate(_pack_field_values(lines)):
+            embed.add_field(
+                name=f"{label} ({len(group)})" if index == 0 else BLANK_FIELD_NAME,
+                value=chunk,
+                inline=False,
+            )
+    embed.set_footer(text="Data: public MLB Stats API")
+    return embed
+
+
+def _injury_groups(
+    players: Sequence[InjuredPlayer],
+) -> list[tuple[str, list[InjuredPlayer]]]:
+    """Split the list by status, shortest stint first.
+
+    The 10-day and 60-day lists mean very different things for a return date,
+    so they are worth reading apart rather than as one roll call.
+    """
+    grouped: dict[str, list[InjuredPlayer]] = {}
+    for player in players:
+        grouped.setdefault(player.status, []).append(player)
+    return sorted(grouped.items(), key=lambda item: (_status_length(item[0]), item[0]))
+
+
+def _status_length(status: str) -> int:
+    """The number of days in a status name, used only to order the sections."""
+    match = re.search(r"\d+", status)
+    return int(match.group()) if match else 999
+
+
 def help_embed() -> discord.Embed:
     embed = discord.Embed(
         title="Orioles bot help",
@@ -729,6 +781,15 @@ def help_embed() -> discord.Embed:
             "Show which Orioles relievers are available, judged from their "
             "usage over the last few days — who threw today, who is on a "
             "back-to-back, and how much rest everyone else has."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="/injuries",
+        value=(
+            "Show the Orioles injured list: which list each player is on, the "
+            "day the stint started, the injury when MLB names it, and any "
+            "rehab assignment with how many rehab games he has played."
         ),
         inline=False,
     )

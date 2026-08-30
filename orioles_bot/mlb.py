@@ -22,11 +22,13 @@ from .models import (
     GameInfo,
     HittingSplit,
     LineupPlayer,
+    MINOR_LEAGUE_SPORT_IDS,
     NextGame,
     PitcherInfo,
     PitchingGame,
     PitchingSplit,
     PlayerRef,
+    RosterEntry,
     RunningProfile,
     ScheduleWindow,
     StatsWindow,
@@ -239,6 +241,59 @@ class MlbClient:
             f"/teams/{ORIOLES_TEAM_ID}/roster", {"rosterType": "active"}
         )
         return parse_roster(data)
+
+    async def fetch_roster_entries(
+        self, roster_type: str = "fullSeason"
+    ) -> tuple[RosterEntry, ...]:
+        """The roster with each player's status attached.
+
+        ``fullSeason`` rather than ``40Man`` because a 60-day injured list
+        placement takes a player off the 40-man roster entirely, and he is
+        exactly the player an injury list has to name.
+        """
+        data = await self._get_json(
+            f"/teams/{ORIOLES_TEAM_ID}/roster", {"rosterType": roster_type}
+        )
+        return parse_roster_entries(data)
+
+    async def fetch_transactions_between(
+        self, start: date, end: date
+    ) -> list[TransactionInfo]:
+        """Every Orioles transaction in an inclusive date range."""
+        data = await self._get_json(
+            "/transactions",
+            {
+                "teamId": ORIOLES_TEAM_ID,
+                "startDate": start.isoformat(),
+                "endDate": end.isoformat(),
+            },
+        )
+        transactions = data.get("transactions", [])
+        if not isinstance(transactions, list):
+            return []
+        return parse_transactions(transactions, end)
+
+    async def fetch_minor_league_game_dates(
+        self, player_id: int, start: date, end: date
+    ) -> tuple[date, ...]:
+        """The days a player appeared in a minor league game in the range.
+
+        Used to count rehab appearances: a rehabbing big leaguer stays on the
+        injured list, so every game he plays is logged under a farm club. Both
+        stat groups are asked for, since a rehab start and a rehab at-bat are
+        filed in different ones.
+        """
+        data = await self._get_json(
+            f"/people/{player_id}/stats",
+            {
+                "stats": "gameLog",
+                "group": "hitting,pitching",
+                "startDate": start.isoformat(),
+                "endDate": end.isoformat(),
+                "sportId": ",".join(str(item) for item in MINOR_LEAGUE_SPORT_IDS),
+            },
+        )
+        return parse_game_log_dates(data)
 
     async def search_players(self, query: str) -> tuple[PlayerRef, ...]:
         """League-wide name search, used when a name is not on the Orioles roster."""
@@ -1297,6 +1352,64 @@ def parse_roster(data: dict[str, Any]) -> tuple[PlayerRef, ...]:
         seen.add(player_id)
         players.append(PlayerRef(player_id, name, _position_abbreviation(entry)))
     return tuple(players)
+
+
+def parse_roster_entries(data: dict[str, Any]) -> tuple[RosterEntry, ...]:
+    """The roster as spots rather than players, keeping each player's status."""
+    entries = data.get("roster")
+    if not isinstance(entries, list):
+        return ()
+
+    parsed: list[RosterEntry] = []
+    seen: set[int] = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        person = entry.get("person")
+        person = person if isinstance(person, dict) else {}
+        player_id = _safe_int(person.get("id"))
+        name = str(person.get("fullName") or "").strip()
+        if player_id is None or not name or player_id in seen:
+            continue
+        seen.add(player_id)
+        status = entry.get("status")
+        status = status if isinstance(status, dict) else {}
+        parsed.append(
+            RosterEntry(
+                player=PlayerRef(player_id, name, _position_abbreviation(entry)),
+                status_code=_optional_text(status.get("code")),
+                status_description=_optional_text(status.get("description")),
+            )
+        )
+    return tuple(parsed)
+
+
+def parse_game_log_dates(data: dict[str, Any]) -> tuple[date, ...]:
+    """Every distinct day a game log covers, oldest first."""
+    groups = data.get("stats")
+    if not isinstance(groups, list):
+        return ()
+
+    days: set[date] = set()
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        for split in group.get("splits", []) or []:
+            if not isinstance(split, dict):
+                continue
+            game_date = _parse_date(split.get("date"))
+            if game_date is not None:
+                days.add(game_date)
+    return tuple(sorted(days))
+
+
+def _parse_date(value: Any) -> date | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.strptime(value[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return None
 
 
 def parse_people(data: dict[str, Any]) -> tuple[PlayerRef, ...]:
