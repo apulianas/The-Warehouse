@@ -12,6 +12,7 @@ A Dockerized Python 3.12 Discord bot that posts Baltimore Orioles lineups, roste
   - `/schedule [days]` — upcoming Orioles games over the next N days.
   - `/bullpen` — which relievers are available, judged from their recent usage.
   - `/ondeck` — who is at bat, on deck, and in the hole in the game being played now.
+  - `/pitchmix [pitcher]` — a pitcher's pitch usage in the current or last game, with today's speeds against his season averages.
   - `/injuries` — the current injured list, with dates, injuries, and rehab assignments.
   - `/help` — command help.
 - Discord embeds with game status, venue, score when available, both batting orders, positions, both starting pitchers labelled RHP or LHP, transaction details, and hot/cold matchup emojis with the underlying wOBA and plate appearances when enough history exists.
@@ -53,6 +54,19 @@ A Dockerized Python 3.12 Discord bot that posts Baltimore Orioles lineups, roste
   appearance. MLB publishes no availability list, so this is an inference from usage, not
   an official status. The card is cached for a few minutes, since it costs one request per
   pitcher.
+- `/pitchmix` breaks one outing down by pitch type: how many of each pitch was
+  thrown, each as a whole-percent share of the pitch count, and the average
+  speed today beside the same pitch's season average and the gap between them.
+  It reads the game's play-by-play, which is the only public feed carrying a
+  pitch type and a release speed per pitch, and defaults to the Orioles arm most
+  recently on the mound — the pitcher working now, or the last one to work when
+  the game is over. Name any pitcher to read his outing instead. When today has
+  no game underway or finished, last night's is used, so a card pulled up in the
+  morning still describes the start that just happened. Pitches MLB leaves
+  untyped are bucketed rather than dropped, so the shares always describe the
+  whole pitch count, and the whole-percent shares are rounded to total exactly
+  100. A pitcher with no tracked season arsenal keeps his pitch mix and loses
+  only the speed comparison.
 - `/injuries` lists everyone on the injured list, grouped by which list they are on:
   the day the stint started, the announcement date when the placement was backdated, how
   many days he has been out, the injury when MLB names it in the transaction wording, the
@@ -215,6 +229,8 @@ After inviting the bot, slash commands are synced globally when the bot starts. 
 /transactions date:2026-08-06
 /bullpen
 /ondeck
+/pitchmix
+/pitchmix pitcher:Grayson Rodriguez
 /injuries
 /help
 ```
@@ -269,6 +285,20 @@ If no transactions are returned:
 
 ```text
 No Orioles roster transactions found for Thursday, August 6, 2026.
+```
+
+Representative `/pitchmix` embed:
+
+```text
+Grayson Rodriguez — pitch usage
+Baltimore Orioles at New York Yankees
+Grayson Rodriguez (P) — 87 pitches, 3 pitch types
+Speeds compared with his 2026 season averages.
+
+Pitch mix
+Four-Seam Fastball — 45 (52%) · 96.4 mph (+0.9 vs season 95.5 mph)
+Slider — 28 (32%) · 84.6 mph (-0.5 vs season 85.1 mph)
+Changeup — 14 (16%) · 88.1 mph (no season average)
 ```
 
 Representative `/injuries` embed:

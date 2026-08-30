@@ -476,6 +476,110 @@ class PitchingGame:
     opponent_score: int | None = None
 
 
+# MLB leaves the pitch type off a handful of pitches — an automatic ball, a
+# pitchout, anything the tracking system did not classify. Those are bucketed
+# rather than dropped, so the shares still describe the whole pitch count.
+UNKNOWN_PITCH_CODE = "UN"
+UNKNOWN_PITCH_NAME = "Unknown"
+
+
+@dataclass(frozen=True)
+class ThrownPitch:
+    """One pitch from a play-by-play feed, with who threw it and how hard."""
+
+    pitcher: PlayerRef
+    code: str | None = None
+    name: str | None = None
+    speed: float | None = None
+    # Which half the pitch came in, which is the only thing in the feed that
+    # says whose pitcher threw it: the home side pitches the top half.
+    is_top_inning: bool | None = None
+
+
+@dataclass(frozen=True)
+class PitchArsenalEntry:
+    """One pitch type in a pitcher's season arsenal, used as the baseline."""
+
+    code: str
+    name: str
+    count: int = 0
+    average_speed: float | None = None
+
+
+@dataclass(frozen=True)
+class PitchTypeUsage:
+    """One pitch type in an outing, beside the season it is measured against."""
+
+    code: str
+    name: str
+    count: int
+    average_speed: float | None = None
+    season_average_speed: float | None = None
+
+    @property
+    def velocity_delta(self) -> float | None:
+        if self.average_speed is None or self.season_average_speed is None:
+            return None
+        return self.average_speed - self.season_average_speed
+
+
+@dataclass(frozen=True)
+class OutingPitchMix:
+    """What a pitcher threw in one outing, and how it compares to his season.
+
+    ``pitches`` is ordered by how often each type was thrown, so the pitch a
+    start was built around reads off the top. Shares are derived from the
+    counts rather than stored, so the two can never disagree.
+    """
+
+    pitcher: PlayerRef
+    game_pk: int
+    pitches: tuple[PitchTypeUsage, ...] = ()
+    batters_faced: int | None = None
+    # The season the baseline came from, or None when no baseline was found.
+    baseline_season: int | None = None
+
+    @property
+    def total_pitches(self) -> int:
+        return sum(usage.count for usage in self.pitches)
+
+    @property
+    def is_empty(self) -> bool:
+        return self.total_pitches == 0
+
+    @property
+    def has_baseline(self) -> bool:
+        return any(usage.season_average_speed is not None for usage in self.pitches)
+
+    def shares(self) -> tuple[int, ...]:
+        """Whole-percent shares, in ``pitches`` order, that total exactly 100.
+
+        Rounding each share on its own leaves a card whose percentages add up
+        to 99 or 101, so the leftover points go to the pitches with the largest
+        remainders instead.
+        """
+        return whole_percent_shares(tuple(usage.count for usage in self.pitches))
+
+
+def whole_percent_shares(counts: tuple[int, ...]) -> tuple[int, ...]:
+    """Split 100 points across ``counts`` by the largest remainder method."""
+    total = sum(counts)
+    if total <= 0:
+        return tuple(0 for _ in counts)
+
+    exact = [count * 100 / total for count in counts]
+    floors = [int(value) for value in exact]
+    leftover = 100 - sum(floors)
+    order = sorted(
+        range(len(counts)),
+        key=lambda index: (exact[index] - floors[index], counts[index]),
+        reverse=True,
+    )
+    for index in order[:leftover]:
+        floors[index] += 1
+    return tuple(floors)
+
+
 # How far back a reliever's game log is pulled. Long enough to tell a starter
 # from a reliever by how he has been used, short enough to stay one request.
 BULLPEN_LOG_DAYS = 30

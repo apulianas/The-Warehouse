@@ -13,7 +13,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
-from .bullpen import BullpenService
+from .bullpen import BullpenService, is_pitcher
 from .cache import AsyncTtlCache
 from .config import BotConfig, load_config, webhook_id
 from .dates import (
@@ -32,7 +32,10 @@ from .embeds import (
     error_embed,
     injuries_embed,
     no_live_game_embed,
+    no_pitch_mix_game_embed,
+    no_pitches_embed,
     on_deck_embed,
+    pitch_mix_embed,
     help_embed,
     lineup_embeds,
     player_stats_embeds,
@@ -56,6 +59,7 @@ from .models import (
     InjuredPlayer,
     MatchupHistory,
     NextGame,
+    PlayerRef,
     RECENT_SPLIT_DAYS,
     RECENT_SPLIT_HANDS,
     RelieverStatus,
@@ -64,6 +68,7 @@ from .models import (
     TransactionInfo,
     WildCardStandings,
 )
+from .pitch_mix import PitchMixService
 from .player_stats import PlayerStatsService
 from .running import SprintSpeedService
 from .state import AnnouncementState, channel_key
@@ -128,6 +133,7 @@ class OriolesBot(commands.Bot):
         self.sprint_speed = SprintSpeedService()
         self.player_stats = PlayerStatsService()
         self.bullpen = BullpenService()
+        self.pitch_mix = PitchMixService()
         self.injuries = InjuryService()
         self.bullpen_cache: AsyncTtlCache[str, tuple[RelieverStatus, ...]] = (
             AsyncTtlCache(BULLPEN_TTL_SECONDS)
@@ -162,6 +168,7 @@ class OriolesBot(commands.Bot):
         self.tree.add_command(_schedule_command(self))
         self.tree.add_command(_bullpen_command(self))
         self.tree.add_command(_on_deck_command(self))
+        self.tree.add_command(_pitch_mix_command(self))
         self.tree.add_command(_injuries_command(self))
         self.tree.add_command(_help_command())
         await self.tree.sync()
@@ -955,6 +962,107 @@ async def _at_bat_histories(
     if not pairs:
         return None
     return await bot.matchups.history_many(pairs)
+
+
+def _pitch_mix_command(bot: OriolesBot) -> app_commands.Command[Any, ..., None]:
+    @app_commands.command(
+        name="pitchmix",
+        description="Show a pitcher's pitch usage in the current or last game.",
+    )
+    @app_commands.describe(
+        pitcher=(
+            "Pitcher — pick from the Orioles roster or type any full name. "
+            "Defaults to whoever is on the mound."
+        )
+    )
+    async def pitchmix(
+        interaction: discord.Interaction, pitcher: str | None = None
+    ) -> None:
+        await interaction.response.defer(ephemeral=True)
+        client = _require_mlb(bot)
+        today = today_in_zone(bot.config.time_zone)
+        try:
+            resolved: PlayerRef | None = None
+            if pitcher and pitcher.strip():
+                resolved = await bot.player_stats.resolve(client, pitcher)
+                if resolved is None:
+                    await interaction.followup.send(
+                        format_player_not_found(pitcher), ephemeral=True
+                    )
+                    return
+
+            game = await _pitch_mix_game(bot, client, today)
+            if game is None:
+                await interaction.followup.send(
+                    embed=no_pitch_mix_game_embed(today)
+                )
+                return
+
+            season = game.game_date.year if game.game_date else today.year
+            mix = await bot.pitch_mix.outing(
+                client,
+                game,
+                season,
+                resolved.player_id if resolved is not None else None,
+            )
+        except MlbApiError as exc:
+            await interaction.followup.send(embed=error_embed(str(exc)), ephemeral=True)
+            return
+
+        if mix is None or mix.is_empty:
+            await interaction.followup.send(embed=no_pitches_embed(game, resolved))
+            return
+
+        await interaction.followup.send(embed=pitch_mix_embed(mix, game))
+
+    @pitchmix.autocomplete("pitcher")
+    async def pitchmix_autocomplete(
+        interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        if bot.mlb is None:
+            return []
+        suggestions = await bot.player_stats.autocomplete(bot.mlb, current)
+        return [
+            app_commands.Choice(
+                name=f"{item.name} ({item.position})" if item.position else item.name,
+                value=str(item.player_id),
+            )
+            for item in suggestions
+            if is_pitcher(item)
+        ]
+
+    return pitchmix
+
+
+async def _pitch_mix_game(
+    bot: OriolesBot, client: MlbClient, today: date
+) -> GameInfo | None:
+    """The game a pitch mix should be read from: the live one, or the last one.
+
+    Yesterday is only asked about when today has nothing to show, so a card
+    pulled up in the morning still describes last night's start rather than
+    reporting that no game has been played.
+    """
+    for target in (today, today - timedelta(days=1)):
+        game = pitch_mix_game(await client.fetch_games(target))
+        if game is not None:
+            return game
+    return None
+
+
+def pitch_mix_game(games: Sequence[GameInfo]) -> GameInfo | None:
+    """Pick the game whose pitches are worth reading, from one day's slate.
+
+    A game underway wins over a finished one, so a doubleheader reports the
+    game actually being played rather than the one already in the books.
+    """
+    live = [game for game in games if game.is_in_progress]
+    if live:
+        return live[-1]
+    played = [
+        game for game in games if game.has_started and not game.is_unplayed
+    ]
+    return played[-1] if played else None
 
 
 def _help_command() -> app_commands.Command[Any, ..., None]:
