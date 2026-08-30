@@ -168,7 +168,7 @@ class OriolesBot(commands.Bot):
         self.tree.add_command(_schedule_command(self))
         self.tree.add_command(_bullpen_command(self))
         self.tree.add_command(_on_deck_command(self))
-        self.tree.add_command(_pitches_command(self))
+        self.tree.add_command(_pitch_mix_command(self))
         self.tree.add_command(_injuries_command(self))
         self.tree.add_command(_help_command())
         await self.tree.sync()
@@ -964,9 +964,9 @@ async def _at_bat_histories(
     return await bot.matchups.history_many(pairs)
 
 
-def _pitches_command(bot: OriolesBot) -> app_commands.Command[Any, ..., None]:
+def _pitch_mix_command(bot: OriolesBot) -> app_commands.Command[Any, ..., None]:
     @app_commands.command(
-        name="pitches",
+        name="pitchmix",
         description="Show a pitcher's pitch usage in the current or last game.",
     )
     @app_commands.describe(
@@ -975,7 +975,7 @@ def _pitches_command(bot: OriolesBot) -> app_commands.Command[Any, ..., None]:
             "Defaults to whoever is on the mound."
         )
     )
-    async def pitches(
+    async def pitchmix(
         interaction: discord.Interaction, pitcher: str | None = None
     ) -> None:
         await interaction.response.defer(ephemeral=True)
@@ -1015,8 +1015,8 @@ def _pitches_command(bot: OriolesBot) -> app_commands.Command[Any, ..., None]:
 
         await interaction.followup.send(embed=pitch_mix_embed(mix, game))
 
-    @pitches.autocomplete("pitcher")
-    async def pitches_autocomplete(
+    @pitchmix.autocomplete("pitcher")
+    async def pitchmix_autocomplete(
         interaction: discord.Interaction, current: str
     ) -> list[app_commands.Choice[str]]:
         if bot.mlb is None:
@@ -1031,7 +1031,7 @@ def _pitches_command(bot: OriolesBot) -> app_commands.Command[Any, ..., None]:
             if is_pitcher(item)
         ]
 
-    return pitches
+    return pitchmix
 
 
 async def _pitch_mix_game(

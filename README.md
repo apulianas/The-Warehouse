@@ -12,7 +12,7 @@ A Dockerized Python 3.12 Discord bot that posts Baltimore Orioles lineups, roste
   - `/schedule [days]` — upcoming Orioles games over the next N days.
   - `/bullpen` — which relievers are available, judged from their recent usage.
   - `/ondeck` — who is at bat, on deck, and in the hole in the game being played now.
-  - `/pitches [pitcher]` — a pitcher's pitch usage in the current or last game, with today's speeds against his season averages.
+  - `/pitchmix [pitcher]` — a pitcher's pitch usage in the current or last game, with today's speeds against his season averages.
   - `/injuries` — the current injured list, with dates, injuries, and rehab assignments.
   - `/help` — command help.
 - Discord embeds with game status, venue, score when available, both batting orders, positions, both starting pitchers labelled RHP or LHP, transaction details, and hot/cold matchup emojis with the underlying wOBA and plate appearances when enough history exists.
@@ -54,7 +54,7 @@ A Dockerized Python 3.12 Discord bot that posts Baltimore Orioles lineups, roste
   appearance. MLB publishes no availability list, so this is an inference from usage, not
   an official status. The card is cached for a few minutes, since it costs one request per
   pitcher.
-- `/pitches` breaks one outing down by pitch type: how many of each pitch was
+- `/pitchmix` breaks one outing down by pitch type: how many of each pitch was
   thrown, each as a whole-percent share of the pitch count, and the average
   speed today beside the same pitch's season average and the gap between them.
   It reads the game's play-by-play, which is the only public feed carrying a
@@ -229,8 +229,8 @@ After inviting the bot, slash commands are synced globally when the bot starts. 
 /transactions date:2026-08-06
 /bullpen
 /ondeck
-/pitches
-/pitches pitcher:Grayson Rodriguez
+/pitchmix
+/pitchmix pitcher:Grayson Rodriguez
 /injuries
 /help
 ```
@@ -287,7 +287,7 @@ If no transactions are returned:
 No Orioles roster transactions found for Thursday, August 6, 2026.
 ```
 
-Representative `/pitches` embed:
+Representative `/pitchmix` embed:
 
 ```text
 Grayson Rodriguez — pitch usage

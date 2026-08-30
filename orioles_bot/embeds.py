@@ -842,7 +842,7 @@ def help_embed() -> discord.Embed:
         inline=False,
     )
     embed.add_field(
-        name="/pitches [pitcher]",
+        name="/pitchmix [pitcher]",
         value=(
             "Show a pitcher's pitch usage in the game being played now, or the "
             "last one played: how many of each pitch he threw, each as a share "
