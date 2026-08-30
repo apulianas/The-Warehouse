@@ -116,7 +116,7 @@ DISCORD_CHANNEL_ID=123456789012345678,987654321098765432
 ```
 
 ```bash
-docker compose up -d
+docker compose up -d --build
 ```
 
 Each channel is tracked separately, so a channel you add later starts posting from the
@@ -136,7 +136,7 @@ SUBSTITUTION_CHANNEL_ID=987654321098765432
 ```
 
 ```bash
-docker compose up -d
+docker compose up -d --build
 ```
 
 `SUBSTITUTION_WEBHOOK_URL` does the same thing for a server the bot is not
@@ -162,7 +162,7 @@ DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/123456789012345678/your-web
 ```
 
 ```bash
-docker compose up -d
+docker compose up -d --build
 ```
 
 Webhooks can be combined with `DISCORD_CHANNEL_ID`, and several can be listed
@@ -179,6 +179,35 @@ A webhook URL ends in a secret token that lets anyone post to that channel, so
 keep it in `.env` and out of source control. Only the webhook's numeric ID is
 ever written to the state file or the logs. `DISCORD_TOKEN` is still required
 even in a webhook-only setup, because the bot needs a Discord session to run.
+
+### Updating to the latest code
+
+The bot's code is copied into the image at build time, so pulling new commits is
+not enough on its own. A plain `docker compose up -d` sees an image that already
+exists and restarts the old code. Always rebuild:
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+Check that what is running matches what you pulled:
+
+```bash
+git log -1 --oneline
+docker compose logs --tail=20 orioles-bot
+```
+
+New releases sometimes add settings. `.env` is yours and is never overwritten by
+a pull, so compare it against `.env.example` after updating and copy over
+anything new:
+
+```bash
+diff <(grep -o '^[A-Z_]*=' .env | sort) <(grep -o '^[A-Z_]*=' .env.example | sort)
+```
+
+Anything missing keeps its default, which usually looks like the new feature
+silently not working.
 
 ## Environment variables
 
