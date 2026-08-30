@@ -15,9 +15,11 @@ from .models import (
     MatchupHistory,
     NextGame,
     ORIOLES_TEAM_NAME,
+    OutingPitchMix,
     PitcherInfo,
     PitchingGame,
     PitchingSplit,
+    PitchTypeUsage,
     PlayerRef,
     AtBatState,
     RECENT_SPLIT_DAYS,
@@ -717,6 +719,74 @@ def format_bullpen_window(workload_days: int) -> str:
 
 def format_no_relievers() -> str:
     return "No relievers found on the active roster."
+
+
+def format_pitch_mix(mix: OutingPitchMix) -> str:
+    """The pitch mix as one line per pitch type, most thrown first."""
+    shares = mix.shares()
+    return "\n".join(
+        format_pitch_usage(usage, share)
+        for usage, share in zip(mix.pitches, shares)
+    )
+
+
+def format_pitch_usage(usage: PitchTypeUsage, share: int) -> str:
+    """One pitch type: how often it was thrown, and how hard versus the season."""
+    line = f"**{usage.name}** — {usage.count} ({share}%)"
+    if usage.average_speed is None:
+        return f"{line} · speed not tracked"
+    return f"{line} · {format_speed(usage.average_speed)} {format_velocity_delta(usage)}"
+
+
+def format_velocity_delta(usage: PitchTypeUsage) -> str:
+    """The gap to the season average, or a note that there is no baseline."""
+    delta = usage.velocity_delta
+    if delta is None or usage.season_average_speed is None:
+        return "(no season average)"
+    return (
+        f"({delta:+.1f} vs season {format_speed(usage.season_average_speed)})"
+    )
+
+
+def format_speed(value: float | None) -> str:
+    """A pitch speed the way a broadcast reads it: one decimal, in mph."""
+    if value is None:
+        return NO_STAT
+    return f"{value:.1f} mph"
+
+
+def format_pitch_mix_summary(mix: OutingPitchMix) -> str:
+    """The header line: who threw how many pitches, and against what baseline."""
+    pitch_label = "pitch" if mix.total_pitches == 1 else "pitches"
+    parts = [f"{mix.total_pitches} {pitch_label}"]
+    if mix.batters_faced:
+        parts.append(f"{mix.batters_faced} BF")
+    type_count = len(mix.pitches)
+    type_label = "pitch type" if type_count == 1 else "pitch types"
+    parts.append(f"{type_count} {type_label}")
+    summary = f"{format_player_heading(mix.pitcher)} — {', '.join(parts)}"
+    if mix.has_baseline and mix.baseline_season is not None:
+        return f"{summary}\nSpeeds compared with his {mix.baseline_season} season averages."
+    return f"{summary}\nNo season averages available to compare speeds against."
+
+
+def format_no_pitches(game: GameInfo) -> str:
+    return (
+        "No pitches have been thrown yet in "
+        f"{format_game_title(game)}."
+    )
+
+
+def format_pitcher_not_in_game(player: PlayerRef, game: GameInfo) -> str:
+    return f"{player.name} has not pitched in {format_game_title(game)}."
+
+
+def format_no_pitch_mix_game(target_date: date) -> str:
+    return (
+        "No Orioles game has been played yet on "
+        f"{format_moment(target_date, '%A, %B %-d, %Y')}. Try /schedule for what "
+        "is coming up."
+    )
 
 
 def format_hitting_split(split: HittingSplit) -> str:

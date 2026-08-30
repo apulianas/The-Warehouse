@@ -24,6 +24,7 @@ from .models import (
     LineupPlayer,
     MINOR_LEAGUE_SPORT_IDS,
     NextGame,
+    PitchArsenalEntry,
     PitcherInfo,
     PitchingGame,
     PitchingSplit,
@@ -34,6 +35,7 @@ from .models import (
     StatsWindow,
     Substitution,
     TeamRecord,
+    ThrownPitch,
     TransactionInfo,
     TransactionPlayer,
     WildCardStandings,
@@ -221,6 +223,35 @@ class MlbClient:
         """
         data = await self._get_json(f"/game/{game.game_pk}/linescore")
         return parse_linescore(data, game)
+
+    async def fetch_play_by_play(self, game_pk: int) -> tuple[ThrownPitch, ...]:
+        """Every pitch thrown in a game, in the order they were thrown.
+
+        The play-by-play feed is the only public place MLB publishes a pitch
+        type and a release speed per pitch; the boxscore carries neither.
+        """
+        data = await self._get_json(f"/game/{game_pk}/playByPlay")
+        return parse_thrown_pitches(data)
+
+    async def fetch_pitch_arsenal(
+        self, player_id: int, season: int
+    ) -> dict[str, PitchArsenalEntry]:
+        """A pitcher's season arsenal, keyed by pitch type code.
+
+        This is the baseline an outing's velocity is read against. A pitcher
+        with no tracked pitches this season returns nothing, which is different
+        from him not having thrown a given pitch.
+        """
+        data = await self._get_json(
+            f"/people/{player_id}/stats",
+            {
+                "stats": "pitchArsenal",
+                "group": "pitching",
+                "season": season,
+                "sportId": 1,
+            },
+        )
+        return parse_pitch_arsenal(data)
 
     async def fetch_transactions(self, target_date: date) -> list[TransactionInfo]:
         data = await self._get_json(
@@ -913,6 +944,106 @@ def _linescore_player(raw: Any) -> PlayerRef | None:
     if player_id is None or not name:
         return None
     return PlayerRef(player_id, name)
+
+
+def parse_thrown_pitches(data: dict[str, Any]) -> tuple[ThrownPitch, ...]:
+    """Pull every pitch out of a play-by-play feed, in the order thrown.
+
+    Each play carries the pitcher who worked it, and each of its events is a
+    pitch, a pickoff, or an in-play action, so the events are filtered on
+    ``isPitch`` rather than counted whole.
+    """
+    plays = data.get("allPlays")
+    if not isinstance(plays, list):
+        return ()
+
+    pitches: list[ThrownPitch] = []
+    for play in plays:
+        if not isinstance(play, dict):
+            continue
+        matchup = play.get("matchup")
+        matchup = matchup if isinstance(matchup, dict) else {}
+        pitcher = _linescore_player(matchup.get("pitcher"))
+        if pitcher is None:
+            continue
+        about = play.get("about")
+        about = about if isinstance(about, dict) else {}
+        half = str(about.get("halfInning") or "").strip().casefold()
+        is_top_inning = (
+            True if half == "top" else False if half == "bottom" else None
+        )
+
+        events = play.get("playEvents")
+        if not isinstance(events, list):
+            continue
+        for event in events:
+            if not isinstance(event, dict) or not event.get("isPitch"):
+                continue
+            details = event.get("details")
+            details = details if isinstance(details, dict) else {}
+            pitch_type = details.get("type")
+            pitch_type = pitch_type if isinstance(pitch_type, dict) else {}
+            pitch_data = event.get("pitchData")
+            pitch_data = pitch_data if isinstance(pitch_data, dict) else {}
+            pitches.append(
+                ThrownPitch(
+                    pitcher=pitcher,
+                    code=_optional_text(pitch_type.get("code")),
+                    name=_optional_text(pitch_type.get("description")),
+                    speed=_safe_float(pitch_data.get("startSpeed")),
+                    is_top_inning=is_top_inning,
+                )
+            )
+    return tuple(pitches)
+
+
+def parse_pitch_arsenal(data: dict[str, Any]) -> dict[str, PitchArsenalEntry]:
+    """A season arsenal keyed by pitch type code, as the velocity baseline.
+
+    MLB reports the average speed per pitch type here, which is what an
+    outing's velocity is worth comparing against.
+    """
+    groups = data.get("stats")
+    if not isinstance(groups, list):
+        return {}
+
+    arsenal: dict[str, PitchArsenalEntry] = {}
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        entries = group.get("splits")
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            stat = entry.get("stat")
+            if not isinstance(stat, dict):
+                continue
+            pitch_type = stat.get("type")
+            pitch_type = pitch_type if isinstance(pitch_type, dict) else {}
+            code = _optional_text(pitch_type.get("code"))
+            if code is None:
+                continue
+            code = code.upper()
+            if code in arsenal:
+                continue
+            arsenal[code] = PitchArsenalEntry(
+                code=code,
+                name=_optional_text(pitch_type.get("description")) or code,
+                count=_safe_int(stat.get("count")) or 0,
+                average_speed=_safe_float(stat.get("averageSpeed")),
+            )
+    return arsenal
+
+
+def _safe_float(value: Any) -> float | None:
+    try:
+        if value is None or isinstance(value, bool):
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def parse_game(raw_game: dict[str, Any], boxscore: dict[str, Any] | None = None) -> GameInfo:

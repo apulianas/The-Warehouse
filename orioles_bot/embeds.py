@@ -29,6 +29,8 @@ from .formatting import (
     format_injury_summary,
     format_no_games,
     format_no_injuries,
+    format_no_pitch_mix_game,
+    format_no_pitches,
     format_no_player_stats,
     format_no_relievers,
     format_no_scheduled_games,
@@ -36,6 +38,9 @@ from .formatting import (
     format_no_transactions,
     format_orioles_standing,
     format_orioles_wild_card,
+    format_pitch_mix,
+    format_pitch_mix_summary,
+    format_pitcher_not_in_game,
     format_pitchers,
     format_pitching_split,
     format_pitching_game,
@@ -72,6 +77,7 @@ from .models import (
     NextGame,
     ORIOLES_TEAM_ID,
     ORIOLES_TEAM_NAME,
+    OutingPitchMix,
     PitchingSplit,
     PitchingGame,
     PlayerRef,
@@ -674,6 +680,57 @@ def bullpen_embed(
     return embed
 
 
+def pitch_mix_embed(mix: OutingPitchMix, game: GameInfo) -> discord.Embed:
+    """One pitcher's outing broken down by pitch type, speed and share."""
+    embed = discord.Embed(
+        title=format_game_title(game),
+        url=savant_preview_url(game.game_pk),
+        description=_limit_description(format_pitch_mix_summary(mix)),
+        color=ORIOLES_ORANGE,
+    )
+    embed.set_author(name=f"{mix.pitcher.name} — pitch usage")
+    embed.set_thumbnail(url=headshot_url(mix.pitcher.player_id))
+    for index, chunk in enumerate(
+        _pack_field_values(format_pitch_mix(mix).split("\n"))
+    ):
+        embed.add_field(
+            name="Pitch mix" if index == 0 else BLANK_FIELD_NAME,
+            value=chunk,
+            inline=False,
+        )
+    embed.set_footer(text=f"{game.status} • Data: public MLB Stats API")
+    return embed
+
+
+def no_pitches_embed(
+    game: GameInfo, player: PlayerRef | None = None
+) -> discord.Embed:
+    """Nobody has thrown yet, or the pitcher asked about has not appeared."""
+    embed = discord.Embed(
+        title="Orioles pitch usage",
+        description=(
+            format_no_pitches(game)
+            if player is None
+            else format_pitcher_not_in_game(player, game)
+        ),
+        color=ORIOLES_ORANGE,
+    )
+    embed.set_thumbnail(url=team_logo_url(ORIOLES_TEAM_ID))
+    embed.set_footer(text="Data: public MLB Stats API")
+    return embed
+
+
+def no_pitch_mix_game_embed(target_date: date) -> discord.Embed:
+    embed = discord.Embed(
+        title="Orioles pitch usage",
+        description=format_no_pitch_mix_game(target_date),
+        color=ORIOLES_ORANGE,
+    )
+    embed.set_thumbnail(url=team_logo_url(ORIOLES_TEAM_ID))
+    embed.set_footer(text="Data: public MLB Stats API")
+    return embed
+
+
 def injuries_embed(
     players: Sequence[InjuredPlayer], today: date
 ) -> discord.Embed:
@@ -781,6 +838,16 @@ def help_embed() -> discord.Embed:
             "Show which Orioles relievers are available, judged from their "
             "usage over the last few days — who threw today, who is on a "
             "back-to-back, and how much rest everyone else has."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="/pitches [pitcher]",
+        value=(
+            "Show a pitcher's pitch usage in the game being played now, or the "
+            "last one played: how many of each pitch he threw, each as a share "
+            "of his pitch count, and today's average speed against his season "
+            "average. Defaults to the Orioles arm most recently on the mound."
         ),
         inline=False,
     )
