@@ -9,6 +9,7 @@ from .models import (
     DivisionStandings,
     GameInfo,
     HittingSplit,
+    InjuredPlayer,
     LineupPlayer,
     MatchupAnnotation,
     MatchupHistory,
@@ -20,6 +21,7 @@ from .models import (
     PlayerRef,
     AtBatState,
     RECENT_SPLIT_DAYS,
+    RehabAssignment,
     RELIEVER_AVAILABLE,
     RELIEVER_CAUTION,
     RELIEVER_UNAVAILABLE,
@@ -608,6 +610,101 @@ def format_reliever_outing(outing: PitchingGame) -> str:
         f"{format_moment(outing.game_date, '%b %-d')} {location} {outing.opponent} "
         f"({', '.join(details)})"
     )
+
+
+def format_injured_player(player: InjuredPlayer, today: date) -> str:
+    """One injury list line: who, since when, and whatever is known since."""
+    heading = format_player_heading(player.player)
+    lines = [f"🏥 {heading} — {player.status}"]
+    placed = format_injury_placement(player, today)
+    if placed:
+        lines.append(placed)
+    if player.injury_note:
+        lines.append(f"Injury: {player.injury_note}")
+    rehab = format_rehab(player.rehab)
+    if rehab:
+        lines.append(rehab)
+    update = format_injury_update(player)
+    if update:
+        lines.append(update)
+    return "\n".join(lines)
+
+
+def format_injury_placement(player: InjuredPlayer, today: date) -> str:
+    """When the stint started, and how long ago that was.
+
+    A backdated placement shows both dates, since the retroactive one decides
+    when he is eligible to come back but the announcement is the day the news
+    broke.
+    """
+    effective = player.effective_date
+    if effective is None:
+        return "Placed on the IL: date unavailable"
+
+    text = f"On the IL since {format_moment(effective, '%b %-d, %Y')}"
+    if player.retroactive_to is not None and player.placed_on is not None:
+        if player.retroactive_to != player.placed_on:
+            text += (
+                f" (retroactive; announced "
+                f"{format_moment(player.placed_on, '%b %-d')})"
+            )
+    days = player.days_out(today)
+    if days is not None:
+        day_label = "day" if days == 1 else "days"
+        text += f" — {days} {day_label}"
+    return text
+
+
+def format_rehab(rehab: RehabAssignment | None) -> str:
+    if rehab is None:
+        return ""
+    where = f" with {rehab.team_name}" if rehab.team_name else ""
+    text = (
+        f"Rehab assignment{where} since "
+        f"{format_moment(rehab.started, '%b %-d')}"
+    )
+    if not rehab.games_known:
+        return f"{text} — games played unavailable"
+    games = rehab.games
+    game_label = "game" if games == 1 else "games"
+    text += f" — {games} rehab {game_label}"
+    last = rehab.last_game
+    if last is not None:
+        text += f", last {format_moment(last, '%b %-d')}"
+    return text
+
+
+def format_injury_update(player: InjuredPlayer) -> str:
+    """The newest roster move naming him, when it says more than the placement.
+
+    MLB's transaction feed is the only status news the Stats API carries, so a
+    transfer to the 60-day list or the start of a rehab stint is as close to a
+    return timetable as this can get.
+    """
+    update = player.latest_update
+    if not update:
+        return ""
+    if player.placed_on is not None and player.latest_update_date == player.placed_on:
+        return ""
+    when = (
+        f"{format_moment(player.latest_update_date, '%b %-d')}: "
+        if player.latest_update_date is not None
+        else ""
+    )
+    return f"Latest: {when}{update}"
+
+
+def format_injury_summary(count: int) -> str:
+    player_label = "player" if count == 1 else "players"
+    return (
+        f"{count} {player_label} on the injured list. Dates, injuries and rehab "
+        "assignments come from MLB's transaction feed; MLB publishes no injury "
+        "report through the Stats API."
+    )
+
+
+def format_no_injuries() -> str:
+    return "No Orioles are on the injured list."
 
 
 def format_bullpen_window(workload_days: int) -> str:

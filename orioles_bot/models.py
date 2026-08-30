@@ -396,6 +396,33 @@ class PlayerRef:
 
 
 @dataclass(frozen=True)
+class RosterEntry:
+    """A roster spot: the player and the status MLB has him listed under."""
+
+    player: PlayerRef
+    status_code: str | None = None
+    status_description: str | None = None
+
+    @property
+    def is_injured(self) -> bool:
+        return is_injured_list_status(self.status_code, self.status_description)
+
+
+def is_injured_list_status(code: str | None, description: str | None) -> bool:
+    """Whether a roster status means the player is on the injured list.
+
+    Read from the description first, since MLB has renumbered the list more
+    than once — the 15-day list became 10-day, then 15-day again — and the
+    wording has outlasted every code.
+    """
+    text = (description or "").casefold()
+    if "injured list" in text or "injury list" in text:
+        return True
+    normalized = (code or "").strip().upper()
+    return normalized in INJURED_LIST_STATUS_CODES
+
+
+@dataclass(frozen=True)
 class HittingSplit:
     games: int = 0
     plate_appearances: int = 0
@@ -487,6 +514,73 @@ class RelieverStatus:
     @property
     def is_available(self) -> bool:
         return self.availability == RELIEVER_AVAILABLE
+
+
+# How far back the transaction feed is read when reconstructing why a player is
+# on the injured list. A 60-day placement made late in one season is still in
+# force the following spring, so a full year plus the winter is the shortest
+# window that reliably finds every current placement.
+INJURY_TRANSACTION_LOOKBACK_DAYS = 400
+# Roster status codes MLB uses for the injured list. The trailing number is the
+# length of the stint, and MLB has changed those lengths more than once, so the
+# description is checked too rather than trusting this list alone.
+INJURED_LIST_STATUS_CODES = frozenset({"D7", "D10", "D15", "D60", "DL"})
+# Sports whose game logs count as rehab work: Triple-A down through the rookie
+# and complex leagues. A rehabbing player stays on the big league injured list,
+# so any game he plays is a minor league one.
+MINOR_LEAGUE_SPORT_IDS = (11, 12, 13, 14, 16)
+
+
+@dataclass(frozen=True)
+class RehabAssignment:
+    """A minor league rehab stint served while still on the injured list."""
+
+    started: date
+    team_name: str | None = None
+    description: str | None = None
+    game_dates: tuple[date, ...] = ()
+    # None when the game log could not be read, which is different from a
+    # rehab assignment announced but not yet played.
+    games_known: bool = True
+
+    @property
+    def games(self) -> int:
+        return len(self.game_dates)
+
+    @property
+    def last_game(self) -> date | None:
+        return max(self.game_dates) if self.game_dates else None
+
+
+@dataclass(frozen=True)
+class InjuredPlayer:
+    """One player on the injured list, with the paper trail behind him.
+
+    MLB publishes no injury report through the Stats API, so everything beyond
+    the roster status — the day he went on, the injury itself, and any rehab
+    assignment — is reconstructed from the team's transaction feed.
+    """
+
+    player: PlayerRef
+    status: str
+    status_code: str | None = None
+    placed_on: date | None = None
+    retroactive_to: date | None = None
+    injury_note: str | None = None
+    latest_update: str | None = None
+    latest_update_date: date | None = None
+    rehab: RehabAssignment | None = None
+
+    @property
+    def effective_date(self) -> date | None:
+        """The day the stint counts from, which is what decides eligibility."""
+        return self.retroactive_to or self.placed_on
+
+    def days_out(self, today: date) -> int | None:
+        start = self.effective_date
+        if start is None or start > today:
+            return None
+        return (today - start).days
 
 
 @dataclass(frozen=True)
