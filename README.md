@@ -86,7 +86,10 @@ A Dockerized Python 3.12 Discord bot that posts Baltimore Orioles lineups, roste
   that runs into extra innings would otherwise drop out of the poll the moment
   the date rolled over, silently taking every substitution after midnight with
   it. The previous day is only re-checked in the small hours, and only while
-  something from it is genuinely live.
+  something from it is genuinely live. The commands that read the game being
+  played — `/ondeck`, `/lineup` without a date, `/bullpen` and `/pitchmix` —
+  follow the same rule, so they answer about the game in extra innings rather
+  than about the empty slate of the new day.
 - Each game of a doubleheader is tracked on its own. Both games share a date,
   so cards are identified by game instead — the two never share a lineup post
   or swallow each other's substitutions, even when the same player pinch hits

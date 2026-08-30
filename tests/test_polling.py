@@ -10,7 +10,12 @@ import pytest
 
 from dataclasses import replace
 
-from orioles_bot.bot import OriolesBot, poll_interval_for
+from orioles_bot.bot import (
+    OriolesBot,
+    carry_over_dates,
+    current_slate,
+    poll_interval_for,
+)
 from orioles_bot.config import BotConfig
 from orioles_bot.dates import today_in_zone
 from orioles_bot.formatting import format_matchup_history, format_platoon_split
@@ -330,11 +335,19 @@ class TestFailedFetchesAreNotCached:
 
 
 class _StubMlb:
-    def __init__(self, games: list[GameInfo]) -> None:
-        self._games = games
+    """The day's games, filed under today only.
 
-    async def fetch_games(self, target_date: object) -> list[GameInfo]:
-        return self._games
+    Answering every date alike would hand the poll's past-midnight lookback a
+    second copy of the same game whenever the suite happens to run in the small
+    hours, and each card would be counted twice.
+    """
+
+    def __init__(self, games: list[GameInfo], today: date | None = None) -> None:
+        self._games = games
+        self._today = today or today_in_zone(CONFIG.time_zone)
+
+    async def fetch_games(self, target_date: date) -> list[GameInfo]:
+        return self._games if target_date == self._today else []
 
     async def fetch_transactions(self, target_date: object) -> list[object]:
         return []
@@ -525,6 +538,80 @@ def test_a_carried_game_is_announced_under_the_date_it_was_played() -> None:
 
     today = today_in_zone(EASTERN)
     assert seen == [(824960, today - timedelta(days=1))]
+
+
+# The slash commands read the same game the poll does, so they need the same
+# lookback: `/ondeck` on an extra-inning game after midnight was answering that
+# nothing was being played.
+LIVE_TODAY = _game("In Progress", abstract="Live", coded="I", game_pk=824961)
+SCHEDULED_TODAY = _game(
+    "Scheduled", abstract="Preview", coded="S", starts_in=timedelta(hours=19)
+)
+
+
+def test_the_small_hours_look_at_yesterday_before_today() -> None:
+    assert carry_over_dates(EASTERN, PAST_MIDNIGHT) == (YESTERDAY, TODAY)
+
+
+def test_the_rest_of_the_day_only_looks_at_today() -> None:
+    assert carry_over_dates(EASTERN, MORNING) == (TODAY,)
+
+
+def test_a_command_works_the_date_a_game_running_past_midnight_belongs_to() -> None:
+    """The bug: `/ondeck` read the new day and found an empty slate."""
+    bot = _carry_bot({YESTERDAY: [LIVE_YESTERDAY], TODAY: [SCHEDULED_TODAY]})
+
+    working, games = asyncio.run(current_slate(bot, bot.mlb, PAST_MIDNIGHT))
+
+    assert working == YESTERDAY
+    assert [game.game_pk for game in games] == [824960]
+
+
+def test_a_command_moves_on_once_yesterdays_game_is_final() -> None:
+    bot = _carry_bot({YESTERDAY: [FINAL_YESTERDAY], TODAY: [SCHEDULED_TODAY]})
+
+    working, games = asyncio.run(current_slate(bot, bot.mlb, PAST_MIDNIGHT))
+
+    assert working == TODAY
+    assert [game.game_pk for game in games] == [SCHEDULED_TODAY.game_pk]
+
+
+def test_a_command_does_not_look_back_after_the_small_hours() -> None:
+    """A day game must not pay for a second schedule request on every use."""
+    bot = _carry_bot({YESTERDAY: [LIVE_YESTERDAY], TODAY: [LIVE_TODAY]})
+
+    working, games = asyncio.run(current_slate(bot, bot.mlb, MORNING))
+
+    assert working == TODAY
+    assert [game.game_pk for game in games] == [824961]
+    assert bot.mlb.requested == [TODAY]  # type: ignore[union-attr]
+
+
+def test_a_failed_lookback_still_answers_with_today() -> None:
+    class _FailingYesterday(_DatedStubMlb):
+        async def fetch_games(self, target_date: date) -> list[GameInfo]:
+            if target_date == YESTERDAY:
+                raise MlbApiError("boom")
+            return await super().fetch_games(target_date)
+
+    bot = OriolesBot(CARRY_CONFIG)
+    bot.mlb = _FailingYesterday({TODAY: [SCHEDULED_TODAY]})  # type: ignore[assignment]
+
+    working, games = asyncio.run(current_slate(bot, bot.mlb, PAST_MIDNIGHT))
+
+    assert working == TODAY
+    assert [game.game_pk for game in games] == [SCHEDULED_TODAY.game_pk]
+
+
+def test_a_failed_read_of_today_is_still_an_error() -> None:
+    class _Failing:
+        async def fetch_games(self, target_date: date) -> list[GameInfo]:
+            raise MlbApiError("boom")
+
+    bot = OriolesBot(CARRY_CONFIG)
+
+    with pytest.raises(MlbApiError):
+        asyncio.run(current_slate(bot, _Failing(), MORNING))  # type: ignore[arg-type]
 
 
 def test_a_carried_game_keeps_the_live_cadence() -> None:
