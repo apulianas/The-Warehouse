@@ -16,10 +16,15 @@ def today_in_zone(time_zone: ZoneInfo, now: datetime | None = None) -> date:
     return current.astimezone(time_zone).date()
 
 
+def is_today_request(value: str | None) -> bool:
+    """Whether a date argument leaves the day to the bot rather than naming one."""
+    return value is None or not value.strip() or value.strip().lower() == "today"
+
+
 def parse_user_date(
     value: str | None, time_zone: ZoneInfo, now: datetime | None = None
 ) -> date:
-    if value is None or not value.strip() or value.strip().lower() == "today":
+    if is_today_request(value):
         return today_in_zone(time_zone, now)
 
     try:

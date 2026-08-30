@@ -21,6 +21,7 @@ from .dates import (
     MAX_STATS_WINDOW_DAYS,
     MIN_SCHEDULE_WINDOW_DAYS,
     MIN_STATS_WINDOW_DAYS,
+    is_today_request,
     parse_user_date,
     schedule_window,
     stats_window,
@@ -113,6 +114,31 @@ CARRY_OVER_CUTOFF_HOUR = 6
 
 def webhook_label(url: str) -> str:
     return f"webhook {webhook_id(url)}"
+
+
+def in_carry_over_window(time_zone: ZoneInfo, now: datetime | None = None) -> bool:
+    """Whether the local clock is still in the small hours of a new day."""
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    return current.astimezone(time_zone).hour < CARRY_OVER_CUTOFF_HOUR
+
+
+def carry_over_dates(
+    time_zone: ZoneInfo, now: datetime | None = None
+) -> tuple[date, ...]:
+    """The dates a game could be filed under right now, most likely first.
+
+    In the small hours that is yesterday before today, because a game that ran
+    past local midnight stays filed under the `officialDate` it started on and
+    today's schedule does not list it at all, while today's own games are still
+    hours away. The rest of the day it is today alone, so an ordinary lookup
+    never pays for a second schedule request.
+    """
+    today = today_in_zone(time_zone, now)
+    if in_carry_over_window(time_zone, now):
+        return (today - timedelta(days=1), today)
+    return (today,)
 
 
 @dataclass(frozen=True)
@@ -278,7 +304,7 @@ class OriolesBot(commands.Bot):
         """
         if self.mlb is None:
             return []
-        if now.astimezone(self.config.time_zone).hour >= CARRY_OVER_CUTOFF_HOUR:
+        if not in_carry_over_window(self.config.time_zone, now):
             return []
 
         previous = target_date - timedelta(days=1)
@@ -631,6 +657,31 @@ class OriolesBot(commands.Bot):
         await self.wait_until_ready()
 
 
+async def current_slate(
+    bot: OriolesBot, client: MlbClient, now: datetime | None = None
+) -> tuple[date, list[GameInfo]]:
+    """The date a command should work, and the games filed under it.
+
+    Normally today. In the small hours it is yesterday instead, but only while
+    one of yesterday's games is still being played: MLB keeps that game filed
+    under the date it started on, so reading today would show an empty slate
+    while extra innings are still going on. A failed lookback falls through to
+    today rather than turning the command into an error.
+    """
+    today = today_in_zone(bot.config.time_zone, now)
+    for target in carry_over_dates(bot.config.time_zone, now):
+        try:
+            games = await client.fetch_games(target)
+        except MlbApiError as exc:
+            if target == today:
+                raise
+            LOGGER.info("Could not re-check %s for a game still running: %s", target, exc)
+            continue
+        if target == today or any(game.is_in_progress for game in games):
+            return target, list(games)
+    return today, []
+
+
 def _lineup_command(bot: OriolesBot) -> app_commands.Command[Any, ..., None]:
     @app_commands.command(name="lineup", description="Show today's Orioles lineup or another date.")
     @app_commands.describe(date="Optional date: today or YYYY-MM-DD")
@@ -639,8 +690,15 @@ def _lineup_command(bot: OriolesBot) -> app_commands.Command[Any, ..., None]:
         if target_date is None:
             return
         await interaction.response.defer(ephemeral=True)
+        client = _require_mlb(bot)
         try:
-            games = await _require_mlb(bot).fetch_games(target_date)
+            # An unnamed date follows the game rather than the clock, so a card
+            # pulled up in extra innings after midnight is still the one being
+            # played instead of an empty slate for the new day.
+            if is_today_request(date):
+                target_date, games = await current_slate(bot, client)
+            else:
+                games = await client.fetch_games(target_date)
         except MlbApiError as exc:
             await interaction.followup.send(embed=error_embed(str(exc)), ephemeral=True)
             return
@@ -868,8 +926,11 @@ def _bullpen_command(bot: OriolesBot) -> app_commands.Command[Any, ..., None]:
     async def bullpen(interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True)
         client = _require_mlb(bot)
-        today = today_in_zone(bot.config.time_zone)
         try:
+            # Workload is read from the day the game being played belongs to,
+            # so an outing in a game running past midnight still counts as
+            # today's work rather than yesterday's.
+            today, _ = await current_slate(bot, client)
             relievers = await bot.bullpen_cache.get_or_fetch(
                 today.isoformat(),
                 lambda: bot.bullpen.relievers(client, today),
@@ -916,9 +977,8 @@ def _on_deck_command(bot: OriolesBot) -> app_commands.Command[Any, ..., None]:
     async def ondeck(interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True)
         client = _require_mlb(bot)
-        today = today_in_zone(bot.config.time_zone)
         try:
-            games = await client.fetch_games(today)
+            target_date, games = await current_slate(bot, client)
         except MlbApiError as exc:
             await interaction.followup.send(embed=error_embed(str(exc)), ephemeral=True)
             return
@@ -927,7 +987,7 @@ def _on_deck_command(bot: OriolesBot) -> app_commands.Command[Any, ..., None]:
         # doubleheader can have one finished and one underway.
         live = next((game for game in games if game.is_in_progress), None)
         if live is None:
-            await interaction.followup.send(embed=no_live_game_embed(today))
+            await interaction.followup.send(embed=no_live_game_embed(target_date))
             return
 
         try:
@@ -991,7 +1051,7 @@ def _pitch_mix_command(bot: OriolesBot) -> app_commands.Command[Any, ..., None]:
                     )
                     return
 
-            game = await _pitch_mix_game(bot, client, today)
+            game = await _pitch_mix_game(bot, client)
             if game is None:
                 await interaction.followup.send(
                     embed=no_pitch_mix_game_embed(today)
@@ -1034,20 +1094,20 @@ def _pitch_mix_command(bot: OriolesBot) -> app_commands.Command[Any, ..., None]:
     return pitchmix
 
 
-async def _pitch_mix_game(
-    bot: OriolesBot, client: MlbClient, today: date
-) -> GameInfo | None:
+async def _pitch_mix_game(bot: OriolesBot, client: MlbClient) -> GameInfo | None:
     """The game a pitch mix should be read from: the live one, or the last one.
 
-    Yesterday is only asked about when today has nothing to show, so a card
-    pulled up in the morning still describes last night's start rather than
-    reporting that no game has been played.
+    The working day is whichever one owns the game being played, so a start
+    still going after midnight is read from the date MLB files it under. The
+    day before that is only asked about when the working day has nothing to
+    show, so a card pulled up in the morning still describes last night's start
+    rather than reporting that no game has been played.
     """
-    for target in (today, today - timedelta(days=1)):
-        game = pitch_mix_game(await client.fetch_games(target))
-        if game is not None:
-            return game
-    return None
+    working, games = await current_slate(bot, client)
+    game = pitch_mix_game(games)
+    if game is not None:
+        return game
+    return pitch_mix_game(await client.fetch_games(working - timedelta(days=1)))
 
 
 def pitch_mix_game(games: Sequence[GameInfo]) -> GameInfo | None:
